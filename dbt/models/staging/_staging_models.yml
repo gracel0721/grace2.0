@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: stg_github_repositories
+    description: Cleaned GitHub repositories from the raw layer.
+    columns:
+      - name: repository_key
+        description: Surrogate key over (source, source_id).
+        data_tests: [unique, not_null]
+      - name: source_id
+        description: Natural key — the GitHub full_name (owner/name).
+        data_tests: [unique, not_null]
+      - name: github_repository_id
+        data_tests: [not_null]
+
+  - name: stg_github_commits
+    description: Cleaned GitHub commits from the raw layer.
+    columns:
+      - name: commit_key
+        data_tests: [unique, not_null]
+      - name: source_id
+        description: Natural key — owner/repo:sha.
+        data_tests: [unique, not_null]
+      - name: commit_id
+        data_tests: [not_null]
+      - name: committed_at
+        data_tests: [not_null]
+
+  - name: stg_calendar_events
+    description: Cleaned calendar events with computed duration.
+    columns:
+      - name: event_key
+        data_tests: [unique, not_null]
+      - name: calendar_event_id
+        data_tests: [unique, not_null]
+      - name: category
+        data_tests:
+          - accepted_values:
+              values: ['work', 'personal', 'learning', 'meeting', 'other']
+      - name: duration_minutes
+        description: Event length in minutes (end - start).
+        data_tests:
+          - not_null

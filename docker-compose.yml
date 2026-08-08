@@ -1,0 +1,51 @@
+# Personal Data Warehouse — local development stack.
+# For this milestone only `postgres` is a long-running service; `dbt` runs on
+# demand via `make dbt` (profiles: tools). API / web / dagster services are
+# added in later milestones.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pdw-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pdw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdw}
+      POSTGRES_DB: ${POSTGRES_DB:-pdw}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-pdw} -d ${POSTGRES_DB:-pdw}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dbt:
+    # Run on demand: `docker compose run --rm dbt build`
+    image: ghcr.io/dbt-labs/dbt-postgres:1.9.0
+    # dbt-labs publishes amd64-only images; run under emulation on Apple Silicon.
+    platform: linux/amd64
+    container_name: pdw-dbt
+    working_dir: /usr/app/dbt
+    profiles: ["tools"]
+    volumes:
+      - ./dbt:/usr/app/dbt
+    environment:
+      DBT_PROFILES_DIR: /usr/app/dbt
+      DBT_POSTGRES_HOST: postgres
+      DBT_POSTGRES_USER: ${POSTGRES_USER:-pdw}
+      DBT_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pdw}
+      DBT_POSTGRES_PORT: "5432"
+      DBT_POSTGRES_DB: ${POSTGRES_DB:-pdw}
+      DBT_POSTGRES_SCHEMA: ${DBT_SCHEMA:-analytics}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

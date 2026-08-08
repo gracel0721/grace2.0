@@ -1,0 +1,12 @@
+pdw:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_POSTGRES_HOST', 'localhost') }}"
+      user: "{{ env_var('DBT_POSTGRES_USER', 'pdw') }}"
+      password: "{{ env_var('DBT_POSTGRES_PASSWORD', 'pdw') }}"
+      port: "{{ env_var('DBT_POSTGRES_PORT', '5432') | int }}"
+      dbname: "{{ env_var('DBT_POSTGRES_DB', 'pdw') }}"
+      schema: "{{ env_var('DBT_POSTGRES_SCHEMA', 'analytics') }}"
+      threads: 4
