@@ -63,6 +63,13 @@ make sync-real     # sync GitHub + Google Calendar into raw tables
 make dbt           # rebuild analytics marts from the real raw data
 ```
 
+Google Calendar needs a one-time OAuth flow to obtain a refresh token (after
+setting `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env`):
+
+```bash
+cd ingestion && uv run pdw auth google   # opens a browser; writes GOOGLE_REFRESH_TOKEN to .env
+```
+
 After `make sync`, inspect the analytics tables:
 
 ```bash
@@ -86,6 +93,8 @@ make psql
 | `make sync-calendar` | sync real Google Calendar data (needs `GOOGLE_*`) |
 | `make sync-real`     | sync both real sources                          |
 | `make reset`  | truncate raw + analytics, then rebuild dbt             |
+
+> Google Calendar also needs a one-time `pdw auth google` (see below).
 | `make test`   | run pytest (unit + integration)                        |
 | `make psql`   | open a psql session                                     |
 | `make status` | show recent pipeline runs                              |

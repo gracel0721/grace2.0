@@ -68,3 +68,8 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return a fresh Settings instance populated from the environment."""
     return Settings.load()
+
+
+def env_file() -> Path:
+    """Absolute path to the local .env (repo root). Never committed."""
+    return _ENV_FILE

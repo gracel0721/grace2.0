@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import click
 
-from .config import get_settings
+from .config import env_file, get_settings
 from .db import connect
 from .migrations import run_migrations
 from .synthetic import generate, load
@@ -201,6 +201,68 @@ def calendar(full: bool, since: int) -> None:
         f"inserted={summary.records_inserted} updated={summary.records_updated} "
         f"failed={summary.records_failed} status={summary.status}"
     )
+
+
+# ---------------------------------------------------------------------------
+# One-time OAuth: `pdw auth google` (spec §23)
+# ---------------------------------------------------------------------------
+def _set_env_var(name: str, value: str) -> None:
+    """Set or append a variable in the local .env (repo root)."""
+    path = env_file()
+    if not path.exists():
+        path.write_text(f"{name}={value}\n")
+        return
+    lines = path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(f"{name}="):
+            lines[i] = f"{name}={value}"
+            break
+    else:
+        lines.append(f"{name}={value}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+@main.group()
+def auth() -> None:
+    """One-time authorization flows for real connectors."""
+
+
+@auth.command()
+@click.option(
+    "--port", type=int, default=8787, show_default=True,
+    help="Loopback port for the OAuth redirect.",
+)
+def google(port: int) -> None:
+    """Run the one-time Google OAuth flow and store the refresh token in .env."""
+    from .connectors.auth import run_oauth_flow
+
+    settings = get_settings()
+    missing = [
+        name
+        for name, val in (
+            ("GOOGLE_CLIENT_ID", settings.google_client_id),
+            ("GOOGLE_CLIENT_SECRET", settings.google_client_secret),
+        )
+        if not val
+    ]
+    if missing:
+        raise click.ClickException(
+            "Missing " + ", ".join(missing)
+            + ". Add them to .env first (spec §7, §23)."
+        )
+
+    click.echo("Starting Google OAuth flow (calendar.readonly scope)...")
+    try:
+        refresh_token = run_oauth_flow(
+            settings.google_client_id,
+            settings.google_client_secret,
+            port=port,
+        )
+    except Exception as exc:  # surface a clean message, not a traceback
+        raise click.ClickException(f"OAuth flow failed: {exc}") from exc
+
+    _set_env_var("GOOGLE_REFRESH_TOKEN", refresh_token)
+    click.echo("Refresh token written to .env. You can now run: make sync-calendar")
 
 
 if __name__ == "__main__":  # pragma: no cover
