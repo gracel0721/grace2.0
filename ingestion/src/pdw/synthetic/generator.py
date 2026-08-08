@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from ..models import CalendarEvent, Commit, Repo
 from .categorize import categorize
 
 SEED = 42
@@ -89,44 +90,6 @@ WEEKDAY_WEIGHTS = [0.7, 1.0, 1.3, 1.1, 0.6, 0.2, 0.1]  # Mon..Sun
 
 
 @dataclass
-class Repo:
-    source_id: str
-    github_repository_id: int
-    name: str
-    owner: str
-    full_name: str
-    language: str
-    created_at: datetime
-    archived: bool
-
-
-@dataclass
-class Commit:
-    source_id: str
-    repository_source_id: str
-    commit_sha: str
-    author_name: str
-    author_email: str
-    committed_at: datetime
-    additions: int
-    deletions: int
-    message: str
-
-
-@dataclass
-class CalendarEvent:
-    source_id: str
-    calendar_id: str
-    title: str
-    start_at: datetime
-    end_at: datetime
-    timezone: str
-    attendees_count: int
-    status: str
-    category: str
-
-
-@dataclass
 class SyntheticDataset:
     repos: list[Repo] = field(default_factory=list)
     commits: list[Commit] = field(default_factory=list)
@@ -141,6 +104,15 @@ def _generate_repos(rng: random.Random, anchor: datetime) -> list[Repo]:
     repos: list[Repo] = []
     for idx, (name, owner, language, archived, offset) in enumerate(REPO_SPECS):
         created = anchor - timedelta(days=offset + rng.randint(0, 45))
+        payload = {
+            "id": 100000 + idx,
+            "name": name,
+            "owner": {"login": owner},
+            "full_name": f"{owner}/{name}",
+            "language": language,
+            "created_at": created.isoformat(),
+            "archived": archived,
+        }
         repos.append(
             Repo(
                 source_id=f"{owner}/{name}",
@@ -151,6 +123,7 @@ def _generate_repos(rng: random.Random, anchor: datetime) -> list[Repo]:
                 language=language,
                 created_at=created,
                 archived=archived,
+                raw_payload=payload,
             )
         )
     return repos
@@ -180,6 +153,22 @@ def _generate_commits(
                     hour=hour, minute=minute, second=0, tzinfo=UTC
                 )
                 sha = _sha(rng)
+                additions = rng.randint(1, 400)
+                deletions = rng.randint(0, 200)
+                message = rng.choice(COMMIT_MESSAGES)
+                payload = {
+                    "sha": sha,
+                    "commit": {
+                        "author": {
+                            "name": author_name,
+                            "email": author_email,
+                            "date": committed_at.isoformat(),
+                        },
+                        "message": message,
+                    },
+                    "additions": additions,
+                    "deletions": deletions,
+                }
                 commits.append(
                     Commit(
                         source_id=f"{repo.full_name}:{sha}",
@@ -188,9 +177,10 @@ def _generate_commits(
                         author_name=author_name,
                         author_email=author_email,
                         committed_at=committed_at,
-                        additions=rng.randint(1, 400),
-                        deletions=rng.randint(0, 200),
-                        message=rng.choice(COMMIT_MESSAGES),
+                        additions=additions,
+                        deletions=deletions,
+                        message=message,
+                        raw_payload=payload,
                     )
                 )
     return commits
@@ -230,6 +220,14 @@ def _generate_calendar(
             attendees = (
                 rng.randint(2, 8) if category == "meeting" else rng.randint(0, 2)
             )
+            payload = {
+                "id": f"evt_{seq}",
+                "summary": title,
+                "start": {"dateTime": start.isoformat(), "timeZone": str(TZ)},
+                "end": {"dateTime": end.isoformat(), "timeZone": str(TZ)},
+                "attendees": [{}] * attendees,
+                "status": "confirmed",
+            }
             events.append(
                 CalendarEvent(
                     source_id=f"evt_{seq}",
@@ -241,6 +239,7 @@ def _generate_calendar(
                     attendees_count=attendees,
                     status="confirmed",
                     category=categorize(title),
+                    raw_payload=payload,
                 )
             )
     return events
