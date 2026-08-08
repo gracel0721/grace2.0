@@ -1,0 +1,63 @@
+version: 2
+
+models:
+  - name: dim_date
+    description: Date dimension spanning all observed activity.
+    columns:
+      - name: date
+        data_tests: [unique, not_null]
+
+  - name: dim_repository
+    description: Repository dimension.
+    columns:
+      - name: repository_key
+        data_tests: [unique, not_null]
+      - name: github_repository_id
+        data_tests: [unique, not_null]
+
+  - name: fct_commits
+    description: Commit fact grain — one row per commit.
+    columns:
+      - name: commit_key
+        data_tests: [unique, not_null]
+      - name: commit_id
+        data_tests: [unique, not_null]
+      - name: repository_key
+        data_tests:
+          - relationships:
+              to: ref('dim_repository')
+              field: repository_key
+
+  - name: fct_calendar_events
+    description: Calendar event fact grain — one row per event.
+    columns:
+      - name: event_key
+        data_tests: [unique, not_null]
+      - name: calendar_event_id
+        data_tests: [unique, not_null]
+      - name: category
+        data_tests:
+          - accepted_values:
+              values: ['work', 'personal', 'learning', 'meeting', 'other']
+
+  - name: mart_daily_activity
+    description: One row per date with commit and meeting aggregates.
+    columns:
+      - name: date
+        data_tests: [unique, not_null]
+
+  - name: mart_project_activity
+    description: Per-project activity and active/stale/inactive status.
+    columns:
+      - name: repository_key
+        data_tests: [unique, not_null]
+      - name: status
+        data_tests:
+          - accepted_values:
+              values: ['active', 'stale', 'inactive']
+
+  - name: mart_monthly_summary
+    description: Month-over-month activity summary.
+    columns:
+      - name: month
+        data_tests: [unique, not_null]

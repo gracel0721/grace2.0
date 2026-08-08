@@ -1,0 +1,38 @@
+[project]
+name = "pdw"
+version = "0.1.0"
+description = "Personal Data Warehouse — ingestion, migrations, synthetic data, and CLI."
+requires-python = ">=3.12"
+dependencies = [
+    "psycopg[binary]>=3.1.18",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "click>=8.1",
+]
+
+[project.scripts]
+pdw = "pdw.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pdw"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 90
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

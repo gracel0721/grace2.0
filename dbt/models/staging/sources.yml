@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Raw ingested data preserved with minimal transformation (spec §8).
+    schema: public
+    tables:
+      - name: raw_github_repositories
+        columns:
+          - name: source
+            data_tests: [not_null]
+          - name: source_id
+            data_tests: [not_null]
+      - name: raw_github_commits
+        columns:
+          - name: source
+            data_tests: [not_null]
+          - name: source_id
+            data_tests: [not_null]
+      - name: raw_calendar_events
+        columns:
+          - name: source
+            data_tests: [not_null]
+          - name: source_id
+            data_tests: [not_null]

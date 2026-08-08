@@ -1,0 +1,14 @@
+# Copy to profiles.yml and adjust. The committed profiles.yml reads connection
+# details from DBT_POSTGRES_* environment variables (set in docker-compose.yml).
+pdw:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost           # use `postgres` inside the compose network
+      user: pdw
+      password: pdw
+      port: 5432
+      dbname: pdw
+      schema: analytics
+      threads: 4
