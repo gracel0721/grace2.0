@@ -26,6 +26,46 @@ models:
       - name: committed_at
         data_tests: [not_null]
 
+  - name: stg_github_pull_requests
+    description: Cleaned GitHub pull requests from the raw layer.
+    columns:
+      - name: pr_key
+        description: Surrogate key over (source, source_id).
+        data_tests: [unique, not_null]
+      - name: source_id
+        description: Natural key — the GitHub node_id.
+        data_tests: [unique, not_null]
+      - name: number
+        data_tests: [not_null]
+      - name: state
+        data_tests:
+          - accepted_values:
+              values: ['open', 'closed']
+      - name: created_at
+        data_tests: [not_null]
+      - name: updated_at
+        data_tests: [not_null]
+
+  - name: stg_github_issues
+    description: Cleaned GitHub issues from the raw layer.
+    columns:
+      - name: issue_key
+        description: Surrogate key over (source, source_id).
+        data_tests: [unique, not_null]
+      - name: source_id
+        description: Natural key — the GitHub node_id.
+        data_tests: [unique, not_null]
+      - name: number
+        data_tests: [not_null]
+      - name: state
+        data_tests:
+          - accepted_values:
+              values: ['open', 'closed']
+      - name: created_at
+        data_tests: [not_null]
+      - name: updated_at
+        data_tests: [not_null]
+
   - name: stg_calendar_events
     description: Cleaned calendar events with computed duration.
     columns:

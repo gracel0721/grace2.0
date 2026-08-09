@@ -1,8 +1,8 @@
 # Personal Data Warehouse — developer commands.
 # Spec §17/§18/§27. Default target is a full synthetic pipeline run.
 .DEFAULT_GOAL := sync
-.PHONY: setup up down migrate seed dbt sync sync-github sync-calendar sync-real \
-        reset test psql status clean
+.PHONY: setup up down migrate seed dbt sync sync-github sync-github-issues \
+        sync-calendar sync-real reset test psql status clean
 
 # Load .env if present (for local uv-run targets that need DATABASE_URL).
 -include .env
@@ -45,6 +45,9 @@ sync: migrate seed dbt ## Full synthetic pipeline: migrate -> seed -> dbt
 sync-github: migrate ## Sync real GitHub data (needs GITHUB_TOKEN)
 	cd ingestion && uv run pdw sync github
 
+sync-github-issues: migrate ## Sync real GitHub PRs + issues (needs GITHUB_TOKEN)
+	cd ingestion && uv run pdw sync github-issues
+
 sync-calendar: migrate ## Sync real Google Calendar data (needs GOOGLE_* creds)
 	cd ingestion && uv run pdw sync calendar
 
@@ -54,7 +57,7 @@ sync-real: sync-github sync-calendar ## Sync both real sources
 reset: ## Truncate raw + analytics so synthetic/real modes don't double-count
 	@echo ">> truncating raw + operational tables"
 	@docker compose exec -T postgres psql -U $${POSTGRES_USER:-pdw} -d $${POSTGRES_DB:-pdw} -c \
-		"TRUNCATE TABLE raw_github_repositories, raw_github_commits, raw_calendar_events, pipeline_runs, sync_state RESTART IDENTITY CASCADE;"
+		"TRUNCATE TABLE raw_github_repositories, raw_github_commits, raw_github_pull_requests, raw_github_issues, raw_calendar_events, pipeline_runs, sync_state RESTART IDENTITY CASCADE;"
 	@echo ">> rebuilding dbt marts"
 	docker compose run --rm dbt build
 	@echo ">> reset complete."

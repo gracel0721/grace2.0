@@ -19,7 +19,7 @@ from datetime import datetime
 from psycopg.types.json import Jsonb
 
 from ..db import connect
-from ..models import CalendarEvent, Commit, Repo
+from ..models import CalendarEvent, Commit, Issue, PullRequest, Repo
 
 GITHUB = "github"
 CALENDAR = "calendar"
@@ -174,6 +174,106 @@ def _load_calendar(cur, events: Iterable[CalendarEvent], source: str) -> tuple[i
     return inserted, updated
 
 
+_PR_SQL = """
+INSERT INTO raw_github_pull_requests
+    (source, source_id, repository_source_id, number, title, state, author,
+     created_at, updated_at, closed_at, merged_at, is_draft, comments_count,
+     raw_payload)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (source, source_id) DO UPDATE SET
+    repository_source_id = EXCLUDED.repository_source_id,
+    number = EXCLUDED.number,
+    title = EXCLUDED.title,
+    state = EXCLUDED.state,
+    author = EXCLUDED.author,
+    created_at = EXCLUDED.created_at,
+    updated_at = EXCLUDED.updated_at,
+    closed_at = EXCLUDED.closed_at,
+    merged_at = EXCLUDED.merged_at,
+    is_draft = EXCLUDED.is_draft,
+    comments_count = EXCLUDED.comments_count,
+    raw_payload = EXCLUDED.raw_payload
+"""
+
+
+def _load_prs(cur, prs: Iterable[PullRequest], source: str) -> tuple[int, int]:
+    inserted = updated = 0
+    for p in prs:
+        if _upsert(
+            cur,
+            _PR_SQL,
+            (
+                source,
+                p.source_id,
+                p.repository_source_id,
+                p.number,
+                p.title,
+                p.state,
+                p.author,
+                p.created_at,
+                p.updated_at,
+                p.closed_at,
+                p.merged_at,
+                p.is_draft,
+                p.comments_count,
+                Jsonb(p.raw_payload or {}),
+            ),
+        ):
+            inserted += 1
+        else:
+            updated += 1
+    return inserted, updated
+
+
+_ISSUE_SQL = """
+INSERT INTO raw_github_issues
+    (source, source_id, repository_source_id, number, title, state,
+     state_reason, author, created_at, updated_at, closed_at, comments_count,
+     raw_payload)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (source, source_id) DO UPDATE SET
+    repository_source_id = EXCLUDED.repository_source_id,
+    number = EXCLUDED.number,
+    title = EXCLUDED.title,
+    state = EXCLUDED.state,
+    state_reason = EXCLUDED.state_reason,
+    author = EXCLUDED.author,
+    created_at = EXCLUDED.created_at,
+    updated_at = EXCLUDED.updated_at,
+    closed_at = EXCLUDED.closed_at,
+    comments_count = EXCLUDED.comments_count,
+    raw_payload = EXCLUDED.raw_payload
+"""
+
+
+def _load_issues(cur, issues: Iterable[Issue], source: str) -> tuple[int, int]:
+    inserted = updated = 0
+    for i in issues:
+        if _upsert(
+            cur,
+            _ISSUE_SQL,
+            (
+                source,
+                i.source_id,
+                i.repository_source_id,
+                i.number,
+                i.title,
+                i.state,
+                i.state_reason,
+                i.author,
+                i.created_at,
+                i.updated_at,
+                i.closed_at,
+                i.comments_count,
+                Jsonb(i.raw_payload or {}),
+            ),
+        ):
+            inserted += 1
+        else:
+            updated += 1
+    return inserted, updated
+
+
 def record_run(conn, source: str, started: datetime, summary: RunSummary) -> None:
     """Write one ``pipeline_runs`` audit row from a RunSummary (spec §24)."""
     with conn.cursor() as cur:
@@ -198,9 +298,7 @@ def record_run(conn, source: str, started: datetime, summary: RunSummary) -> Non
         )
 
 
-def upsert_sync_state(
-    conn, connector: str, entity_key: str, last_cursor: str
-) -> None:
+def upsert_sync_state(conn, connector: str, entity_key: str, last_cursor: str) -> None:
     """Upsert a per-entity incremental checkpoint (spec §12)."""
     with conn.cursor() as cur:
         cur.execute(
@@ -274,6 +372,36 @@ def load_calendar(
             records_fetched=len(events),
             records_inserted=ei,
             records_updated=eu,
+            records_failed=0,
+        )
+        if record_run:
+            record_run(conn, source, started, summary)
+    return summary
+
+
+def load_github_issues(
+    prs: Iterable[PullRequest],
+    issues: Iterable[Issue],
+    *,
+    url: str | None = None,
+    source: str = GITHUB,
+    record_run: bool = True,
+) -> RunSummary:
+    """Load GitHub PRs + issues into their raw tables (spec §13 idempotent)."""
+    from datetime import UTC
+
+    prs = list(prs)
+    issues = list(issues)
+    started = datetime.now(UTC)
+    with connect(url) as conn:
+        with conn.cursor() as cur:
+            pi, pu = _load_prs(cur, prs, source)
+            ii, iu = _load_issues(cur, issues, source)
+
+        summary = RunSummary(
+            records_fetched=len(prs) + len(issues),
+            records_inserted=pi + ii,
+            records_updated=pu + iu,
             records_failed=0,
         )
         if record_run:

@@ -33,11 +33,14 @@ from .loaders import (
     RunSummary,
     _load_calendar,
     _load_commits,
+    _load_issues,
+    _load_prs,
     _load_repos,
     record_run,
 )
 
 GITHUB_CONNECTOR = "github"
+GITHUB_ISSUES_CONNECTOR = "github_issues"
 CALENDAR_CONNECTOR = "calendar"
 
 
@@ -45,8 +48,7 @@ def _all_cursors(conn, connector: str) -> dict[str, str]:
     """Return {entity_key: last_cursor} for every entity of a connector."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT entity_key, last_cursor FROM sync_state "
-            "WHERE connector = %s",
+            "SELECT entity_key, last_cursor FROM sync_state WHERE connector = %s",
             (connector,),
         )
         return {row["entity_key"]: row["last_cursor"] for row in cur.fetchall()}
@@ -86,8 +88,10 @@ def run_github(
         partial = False
 
         for repo in repos:
-            since = None if full else (
-                _parse_cursor(cursors.get(repo.source_id)) or default_since
+            since = (
+                None
+                if full
+                else (_parse_cursor(cursors.get(repo.source_id)) or default_since)
             )
             try:
                 commits_by_repo[repo.source_id] = connector.fetch_commits(
@@ -117,7 +121,9 @@ def run_github(
                     if commits:
                         latest = max(c.committed_at for c in commits)
                         set_cursor(
-                            conn, GITHUB_CONNECTOR, repo.source_id,
+                            conn,
+                            GITHUB_CONNECTOR,
+                            repo.source_id,
                             latest.isoformat(),
                         )
 
@@ -126,6 +132,89 @@ def run_github(
                 records_fetched=fetched,
                 records_inserted=ri + ci,
                 records_updated=ru + cu,
+                records_failed=failures,
+                status="partial" if partial else "success",
+            )
+            record_run(conn, GITHUB, started, summary)
+        return summary
+    except (AuthError, RateLimitError, NetworkError) as exc:
+        _record_failure(url, GITHUB, started, exc)
+        raise
+
+
+def run_github_issues(
+    connector,
+    *,
+    url: str | None = None,
+    full: bool = False,
+    since_days: int = 90,
+) -> RunSummary:
+    """Sync GitHub pull requests + issues incrementally (spec §12).
+
+    Mirrors ``run_github``: fetch repos, then per repo fetch issues+PRs with a
+    ``since`` cursor (the max ``updated_at`` already seen), and load everything
+    in one transaction. Repos are loaded too so the dbt ``repository_key``
+    relationship resolves even when commits haven't been synced. Per-repo
+    failures (one repo 404s) are counted as ``partial``; abort-level errors
+    (auth/rate-limit/network) record a ``failed`` run and re-raise.
+    """
+    started = datetime.now(UTC)
+    try:
+        repos = connector.fetch_repos()  # network; may raise Auth/RateLimit/Net
+
+        with connect(url) as conn:
+            cursors = {} if full else _all_cursors(conn, GITHUB_ISSUES_CONNECTOR)
+
+        default_since = started - timedelta(days=since_days)
+        results: dict[str, tuple[list, list]] = {}
+        failures = 0
+        partial = False
+
+        for repo in repos:
+            since = (
+                None
+                if full
+                else (_parse_cursor(cursors.get(repo.source_id)) or default_since)
+            )
+            try:
+                results[repo.source_id] = connector.fetch_issues_prs(repo, since=since)
+            except (ApiError, MalformedRecordError):  # per-repo -> skip, continue
+                failures += 1
+                partial = True
+
+        # Single write transaction: load repos + issues + PRs, advance cursors.
+        total_items = 0
+        with connect(url) as conn:
+            with conn.cursor() as cur:
+                ri, ru = _load_repos(cur, repos, GITHUB)
+                pi = pu = ii = iu = 0
+                for repo in repos:
+                    res = results.get(repo.source_id)
+                    if res is None:
+                        continue
+                    issues, prs = res
+                    a, b = _load_issues(cur, issues, GITHUB)
+                    ii += a
+                    iu += b
+                    c, d = _load_prs(cur, prs, GITHUB)
+                    pi += c
+                    pu += d
+                    total_items += len(issues) + len(prs)
+                    items = issues + prs
+                    if items:
+                        latest = max(x.updated_at for x in items)
+                        set_cursor(
+                            conn,
+                            GITHUB_ISSUES_CONNECTOR,
+                            repo.source_id,
+                            latest.isoformat(),
+                        )
+
+            fetched = len(repos) + total_items
+            summary = RunSummary(
+                records_fetched=fetched,
+                records_inserted=ri + pi + ii,
+                records_updated=ru + pu + iu,
                 records_failed=failures,
                 status="partial" if partial else "success",
             )
@@ -155,9 +244,7 @@ def run_calendar(
             events = connector.fetch_events(updated_min=_parse_cursor(cursor))
         else:
             time_min = started - timedelta(days=since_days)
-            events = connector.fetch_events(
-                time_min=time_min, time_max=started
-            )
+            events = connector.fetch_events(time_min=time_min, time_max=started)
 
         with connect(url) as conn:
             with conn.cursor() as cur:

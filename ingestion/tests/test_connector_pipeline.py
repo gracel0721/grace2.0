@@ -7,14 +7,15 @@ fake HTTP client but a real database, via the ``clean_db`` fixture.
 from __future__ import annotations
 
 import types
+from datetime import UTC, datetime
 
 import psycopg
 from click.testing import CliRunner
 
 from pdw.connectors.base import HttpClient
 from pdw.connectors.calendar import CalendarClient, CalendarConnector
-from pdw.connectors.github import GitHubClient, GitHubConnector
-from pdw.pipeline.runner import run_calendar, run_github
+from pdw.connectors.github import GitHubClient, GitHubConnector, GitHubIssuesConnector
+from pdw.pipeline.runner import run_calendar, run_github, run_github_issues
 from tests.fakes import FakeHttpClient, FakeResponse
 
 # --- GitHub fixtures --------------------------------------------------------
@@ -51,7 +52,8 @@ def _github_fake(
     for full_name, commits in commits_by_repo.items():
         owner, name = full_name.split("/")
         fake.add(
-            "GET", f"/repos/{owner}/{name}/commits",
+            "GET",
+            f"/repos/{owner}/{name}/commits",
             FakeResponse(json_data=commits),
         )
     return fake
@@ -84,9 +86,10 @@ def test_github_loads_raw(clean_db: str):
     assert _count(clean_db, "raw_github_repositories", "WHERE source='github'") == 2
     assert _count(clean_db, "raw_github_commits", "WHERE source='github'") == 2
     # one successful audit row
-    assert _count(
-        clean_db, "pipeline_runs", "WHERE source='github' AND status='success'"
-    ) == 1
+    assert (
+        _count(clean_db, "pipeline_runs", "WHERE source='github' AND status='success'")
+        == 1
+    )
     # per-repo cursors written
     assert _count(clean_db, "sync_state", "WHERE connector='github'") == 2
 
@@ -108,10 +111,12 @@ def test_github_idempotent(clean_db: str):
 def test_github_incremental_cursor(clean_db: str):
     repos = [_repo_json("gvleverett/repo-a", 1)]
     # Run 1: two commits, the newer at 2024-06-05.
-    commits1 = {"gvleverett/repo-a": [
-        _commit_json("a1", "2024-06-01T00:00:00Z"),
-        _commit_json("a2", "2024-06-05T00:00:00Z"),
-    ]}
+    commits1 = {
+        "gvleverett/repo-a": [
+            _commit_json("a1", "2024-06-01T00:00:00Z"),
+            _commit_json("a2", "2024-06-05T00:00:00Z"),
+        ]
+    }
     run_github(_connector(_github_fake(repos, commits1)), url=clean_db)
 
     # The cursor for repo-a is the max committed_at (2024-06-05).
@@ -140,10 +145,16 @@ def test_github_partial_failure(clean_db: str):
     repos = [_repo_json("gvleverett/repo-a", 1), _repo_json("gvleverett/repo-b", 2)]
     fake = FakeHttpClient()
     fake.add("GET", "/user/repos", FakeResponse(json_data=repos))
-    fake.add("GET", "/repos/gvleverett/repo-a/commits",
-             FakeResponse(json_data=[_commit_json("a1", "2024-06-01T00:00:00Z")]))
-    fake.add("GET", "/repos/gvleverett/repo-b/commits",
-             FakeResponse(status_code=404, json_data={}))  # repo-b 404s
+    fake.add(
+        "GET",
+        "/repos/gvleverett/repo-a/commits",
+        FakeResponse(json_data=[_commit_json("a1", "2024-06-01T00:00:00Z")]),
+    )
+    fake.add(
+        "GET",
+        "/repos/gvleverett/repo-b/commits",
+        FakeResponse(status_code=404, json_data={}),
+    )  # repo-b 404s
 
     summary = run_github(_connector(fake), url=clean_db)
 
@@ -152,13 +163,201 @@ def test_github_partial_failure(clean_db: str):
     # repo-a cursor set, repo-b cursor absent
     with psycopg.connect(clean_db) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT entity_key FROM sync_state WHERE connector='github'"
-            )
+            cur.execute("SELECT entity_key FROM sync_state WHERE connector='github'")
             keys = {r[0] for r in cur.fetchall()}
     assert "gvleverett/repo-a" in keys
     assert "gvleverett/repo-b" not in keys
     assert _count(clean_db, "raw_github_commits") == 1  # only repo-a's commit
+
+
+# --- GitHub issues + PRs integration tests ---------------------------------
+
+
+def _gh_issue_json(
+    number, node_id, iso, state="open", state_reason="completed", closed=False
+):
+    return {
+        "node_id": node_id,
+        "number": number,
+        "title": f"Issue {number}",
+        "state": state,
+        "state_reason": state_reason,
+        "user": {"login": "gvleverett"},
+        "created_at": iso,
+        "updated_at": iso,
+        "closed_at": iso if closed else None,
+        "comments": 4,
+    }
+
+
+def _gh_pr_json(number, node_id, iso, state="open", draft=False, closed=False):
+    return {
+        "node_id": node_id,
+        "number": number,
+        "title": f"PR {number}",
+        "state": state,
+        "user": {"login": "gvleverett"},
+        "created_at": iso,
+        "updated_at": iso,
+        "closed_at": iso if closed else None,
+        "draft": draft,
+        "comments": 7,
+        # The issues endpoint's `pull_request` sub-object only carries URLs;
+        # `merged_at` is not available from this endpoint (NULL).
+        "pull_request": {
+            "url": "https://api.github.com/repos/gvleverett/pdw/pulls/2",
+            "html_url": "https://github.com/gvleverett/pdw/pull/2",
+        },
+    }
+
+
+def _issues_fake(repos, items_by_repo):
+    fake = FakeHttpClient()
+    fake.add("GET", "/user/repos", FakeResponse(json_data=repos))
+    for full_name, items in items_by_repo.items():
+        owner, name = full_name.split("/")
+        fake.add(
+            "GET",
+            f"/repos/{owner}/{name}/issues",
+            FakeResponse(json_data=items),
+        )
+    return fake
+
+
+def _issues_connector(fake):
+    return GitHubIssuesConnector(GitHubClient("tok", client=HttpClient(fake)))
+
+
+def test_github_issues_loads_raw(clean_db):
+    repos = [_repo_json("gvleverett/repo-a", 1), _repo_json("gvleverett/repo-b", 2)]
+    items = {
+        "gvleverett/repo-a": [
+            _gh_issue_json(1, "I_1", "2024-06-01T00:00:00Z"),
+            _gh_pr_json(2, "PR_1", "2024-06-02T00:00:00Z"),
+        ],
+        "gvleverett/repo-b": [_gh_issue_json(3, "I_2", "2024-06-03T00:00:00Z")],
+    }
+    summary = run_github_issues(
+        _issues_connector(_issues_fake(repos, items)), url=clean_db
+    )
+
+    assert summary.status == "success"
+    assert summary.records_failed == 0
+    assert _count(clean_db, "raw_github_repositories", "WHERE source='github'") == 2
+    assert _count(clean_db, "raw_github_issues", "WHERE source='github'") == 2
+    assert _count(clean_db, "raw_github_pull_requests", "WHERE source='github'") == 1
+    assert (
+        _count(clean_db, "pipeline_runs", "WHERE source='github' AND status='success'")
+        == 1
+    )
+    # per-repo cursors under the github_issues connector
+    assert _count(clean_db, "sync_state", "WHERE connector='github_issues'") == 2
+
+
+def test_github_issues_idempotent(clean_db):
+    repos = [_repo_json("gvleverett/repo-a", 1)]
+    items = {
+        "gvleverett/repo-a": [
+            _gh_issue_json(1, "I_1", "2024-06-01T00:00:00Z"),
+            _gh_pr_json(2, "PR_1", "2024-06-02T00:00:00Z"),
+        ]
+    }
+    first = run_github_issues(_issues_connector(_issues_fake(repos, items)), url=clean_db)
+    assert first.records_inserted == 3  # 1 repo + 1 issue + 1 PR
+
+    second = run_github_issues(
+        _issues_connector(_issues_fake(repos, items)), url=clean_db
+    )
+    assert second.records_inserted == 0
+    assert second.records_updated == 3
+    assert _count(clean_db, "raw_github_issues") == 1
+    assert _count(clean_db, "raw_github_pull_requests") == 1
+
+
+def test_github_issues_incremental_cursor(clean_db):
+    repos = [_repo_json("gvleverett/repo-a", 1)]
+    # Run 1: one issue, updated at 2024-06-05.
+    items1 = {
+        "gvleverett/repo-a": [
+            _gh_issue_json(1, "I_1", "2024-06-05T00:00:00Z"),
+        ]
+    }
+    run_github_issues(_issues_connector(_issues_fake(repos, items1)), url=clean_db)
+
+    # The cursor for repo-a is the max updated_at (2024-06-05).
+    with psycopg.connect(clean_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT last_cursor FROM sync_state "
+                "WHERE connector='github_issues' AND entity_key='gvleverett/repo-a'"
+            )
+            cursor = cur.fetchone()[0]
+    assert cursor.startswith("2024-06-05")
+
+    # Run 2: one new issue; the runner must request since=cursor.
+    items2 = {
+        "gvleverett/repo-a": [
+            _gh_issue_json(2, "I_2", "2024-06-10T00:00:00Z"),
+        ]
+    }
+    fake2 = _issues_fake(repos, items2)
+    second = run_github_issues(_issues_connector(fake2), url=clean_db)
+
+    assert second.records_inserted == 1  # only the new issue (repo is an update)
+    params = fake2.params_for("/repos/gvleverett/repo-a/issues")[0]
+    assert params["since"].startswith("2024-06-05")
+    assert _count(clean_db, "raw_github_issues") == 2
+
+
+def test_github_issues_partial_failure(clean_db):
+    """A 404 on one repo's issues -> partial run, other repo still syncs."""
+    repos = [_repo_json("gvleverett/repo-a", 1), _repo_json("gvleverett/repo-b", 2)]
+    fake = FakeHttpClient()
+    fake.add("GET", "/user/repos", FakeResponse(json_data=repos))
+    fake.add(
+        "GET",
+        "/repos/gvleverett/repo-a/issues",
+        FakeResponse(json_data=[_gh_issue_json(1, "I_1", "2024-06-01T00:00:00Z")]),
+    )
+    fake.add(
+        "GET",
+        "/repos/gvleverett/repo-b/issues",
+        FakeResponse(status_code=404, json_data={}),
+    )  # repo-b 404s
+
+    summary = run_github_issues(_issues_connector(fake), url=clean_db)
+
+    assert summary.status == "partial"
+    assert summary.records_failed == 1
+    with psycopg.connect(clean_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT entity_key FROM sync_state WHERE connector='github_issues'"
+            )
+            keys = {r[0] for r in cur.fetchall()}
+    assert "gvleverett/repo-a" in keys
+    assert "gvleverett/repo-b" not in keys
+    assert _count(clean_db, "raw_github_issues") == 1  # only repo-a's issue
+
+
+def test_github_issues_preserves_updated_at(clean_db):
+    """The `updated_at` column must hold GitHub's value, not ingestion time,
+    even after an upsert (regression guard for the double-assignment bug)."""
+    repos = [_repo_json("gvleverett/repo-a", 1)]
+    items = {
+        "gvleverett/repo-a": [
+            _gh_issue_json(1, "I_1", "2024-06-05T12:00:00Z", closed=True),
+        ]
+    }
+    run_github_issues(_issues_connector(_issues_fake(repos, items)), url=clean_db)
+    # re-run -> upsert (update path), which previously clobbered updated_at.
+    run_github_issues(_issues_connector(_issues_fake(repos, items)), url=clean_db)
+
+    with psycopg.connect(clean_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT updated_at FROM raw_github_issues WHERE source_id='I_1'")
+            updated_at = cur.fetchone()[0]
+    assert updated_at == datetime(2024, 6, 5, 12, 0, tzinfo=UTC)
 
 
 # --- Calendar integration tests --------------------------------------------
@@ -181,13 +380,17 @@ def test_calendar_loads_raw(clean_db: str):
     events = {
         "items": [
             {  # timed event
-                "id": "evt1", "status": "confirmed", "summary": "Weekly sync",
+                "id": "evt1",
+                "status": "confirmed",
+                "summary": "Weekly sync",
                 "start": {"dateTime": "2024-06-01T09:00:00Z", "timeZone": "UTC"},
                 "end": {"dateTime": "2024-06-01T09:30:00Z", "timeZone": "UTC"},
                 "attendees": [{"email": "a@x"}, {"email": "b@x"}],
             },
             {  # all-day event
-                "id": "evt2", "status": "confirmed", "summary": "OOO",
+                "id": "evt2",
+                "status": "confirmed",
+                "summary": "OOO",
                 "start": {"date": "2024-06-10", "timeZone": "UTC"},
                 "end": {"date": "2024-06-11", "timeZone": "UTC"},
             },
@@ -215,27 +418,51 @@ def test_calendar_loads_raw(clean_db: str):
 def test_calendar_incremental_upserts_cancellations(clean_db: str):
     # Run 1: backfill (no cursor) loads a confirmed event.
     run_calendar(
-        _cal_connector(_cal_fake([{"items": [
-            {"id": "evt1", "status": "confirmed", "summary": "Weekly sync",
-             "start": {"dateTime": "2024-06-01T09:00:00Z", "timeZone": "UTC"},
-             "end": {"dateTime": "2024-06-01T09:30:00Z", "timeZone": "UTC"}},
-        ]}])),
+        _cal_connector(
+            _cal_fake(
+                [
+                    {
+                        "items": [
+                            {
+                                "id": "evt1",
+                                "status": "confirmed",
+                                "summary": "Weekly sync",
+                                "start": {
+                                    "dateTime": "2024-06-01T09:00:00Z",
+                                    "timeZone": "UTC",
+                                },
+                                "end": {
+                                    "dateTime": "2024-06-01T09:30:00Z",
+                                    "timeZone": "UTC",
+                                },
+                            },
+                        ]
+                    }
+                ]
+            )
+        ),
         url=clean_db,
     )
 
     # Run 2: incremental (cursor exists) returns the same id now cancelled.
     run_calendar(
-        _cal_connector(_cal_fake([{"items": [
-            {"id": "evt1", "status": "cancelled"},
-        ]}])),
+        _cal_connector(
+            _cal_fake(
+                [
+                    {
+                        "items": [
+                            {"id": "evt1", "status": "cancelled"},
+                        ]
+                    }
+                ]
+            )
+        ),
         url=clean_db,
     )
 
     with psycopg.connect(clean_db) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT status FROM raw_calendar_events WHERE source_id='evt1'"
-            )
+            cur.execute("SELECT status FROM raw_calendar_events WHERE source_id='evt1'")
             assert cur.fetchone()[0] == "cancelled"
             # cursor advanced (calendar connector key)
             cur.execute(
@@ -254,7 +481,8 @@ def test_github_credentials_missing(monkeypatch):
     import pdw.cli as cli
 
     monkeypatch.setattr(
-        cli, "get_settings",
+        cli,
+        "get_settings",
         lambda: types.SimpleNamespace(github_token=None),
     )
     result = CliRunner().invoke(cli.main, ["sync", "github"])

@@ -19,6 +19,8 @@ from pdw.migrations import run_migrations
 RAW_TABLES = [
     "raw_github_repositories",
     "raw_github_commits",
+    "raw_github_pull_requests",
+    "raw_github_issues",
     "raw_calendar_events",
     "pipeline_runs",
     "sync_state",

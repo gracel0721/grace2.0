@@ -100,7 +100,10 @@ def sync() -> None:
 @sync.command()
 @click.option("--full", is_flag=True, help="Backfill all history (ignore cursors).")
 @click.option(
-    "--since", type=int, default=90, show_default=True,
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
     help="Lookback window in days for the first/incremental sync.",
 )
 def github(full: bool, since: int) -> None:
@@ -111,9 +114,7 @@ def github(full: bool, since: int) -> None:
 
     settings = get_settings()
     if not settings.github_token:
-        raise click.ClickException(
-            "GITHUB_TOKEN is not set. Add it to .env (spec §7)."
-        )
+        raise click.ClickException("GITHUB_TOKEN is not set. Add it to .env (spec §7).")
 
     import httpx
 
@@ -141,12 +142,60 @@ def github(full: bool, since: int) -> None:
     )
 
 
+@sync.command("github-issues")
+@click.option("--full", is_flag=True, help="Backfill all history (ignore cursors).")
+@click.option(
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Lookback window in days for the first/incremental sync.",
+)
+def github_issues(full: bool, since: int) -> None:
+    """Sync GitHub pull requests + issues (spec §6)."""
+    from .connectors.base import ConnectorError, HttpClient
+    from .connectors.github import GitHubClient, GitHubIssuesConnector
+    from .pipeline.runner import run_github_issues
+
+    settings = get_settings()
+    if not settings.github_token:
+        raise click.ClickException("GITHUB_TOKEN is not set. Add it to .env (spec §7).")
+
+    import httpx
+
+    client = HttpClient(
+        httpx.Client(
+            base_url="https://api.github.com",
+            headers={
+                "Authorization": f"Bearer {settings.github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=30.0,
+        )
+    )
+    connector = GitHubIssuesConnector(GitHubClient(settings.github_token, client=client))
+    click.echo("Syncing GitHub PRs + Issues...")
+    try:
+        summary = run_github_issues(connector, full=full, since_days=since)
+    except ConnectorError as exc:
+        raise click.ClickException(f"GitHub sync failed: {exc}") from exc
+    click.echo(
+        f"  fetched={summary.records_fetched} "
+        f"inserted={summary.records_inserted} updated={summary.records_updated} "
+        f"failed={summary.records_failed} status={summary.status}"
+    )
+
+
 @sync.command()
 @click.option(
     "--full", is_flag=True, help="Backfill the lookback window (ignore cursor)."
 )
 @click.option(
-    "--since", type=int, default=90, show_default=True,
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
     help="Lookback window in days for the initial backfill.",
 )
 def calendar(full: bool, since: int) -> None:
@@ -171,7 +220,8 @@ def calendar(full: bool, since: int) -> None:
     ]
     if missing:
         raise click.ClickException(
-            "Missing Google credentials: " + ", ".join(missing)
+            "Missing Google credentials: "
+            + ", ".join(missing)
             + ". Add them to .env (spec §7, §23)."
         )
 
@@ -188,9 +238,7 @@ def calendar(full: bool, since: int) -> None:
         raise click.ClickException(f"Google auth failed: {exc}") from exc
 
     cal_client = CalendarClient(access_token, http=http)
-    connector = CalendarConnector(
-        cal_client, calendar_id=settings.google_calendar_id
-    )
+    connector = CalendarConnector(cal_client, calendar_id=settings.google_calendar_id)
     click.echo("Syncing Google Calendar...")
     try:
         summary = run_calendar(connector, full=full, since_days=since)
@@ -229,7 +277,10 @@ def auth() -> None:
 
 @auth.command()
 @click.option(
-    "--port", type=int, default=8787, show_default=True,
+    "--port",
+    type=int,
+    default=8787,
+    show_default=True,
     help="Loopback port for the OAuth redirect.",
 )
 def google(port: int) -> None:
@@ -247,8 +298,7 @@ def google(port: int) -> None:
     ]
     if missing:
         raise click.ClickException(
-            "Missing " + ", ".join(missing)
-            + ". Add them to .env first (spec §7, §23)."
+            "Missing " + ", ".join(missing) + ". Add them to .env first (spec §7, §23)."
         )
 
     click.echo("Starting Google OAuth flow (calendar.readonly scope)...")

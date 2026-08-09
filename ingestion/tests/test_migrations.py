@@ -7,6 +7,8 @@ from pdw.migrations import run_migrations
 EXPECTED_TABLES = [
     "raw_github_repositories",
     "raw_github_commits",
+    "raw_github_pull_requests",
+    "raw_github_issues",
     "raw_calendar_events",
     "pipeline_runs",
     "sync_state",
@@ -17,9 +19,7 @@ EXPECTED_TABLES = [
 def test_migrations_create_tables(clean_db: str):
     with psycopg.connect(clean_db) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT to_regclass(%s)", (f"public.{EXPECTED_TABLES[0]}",)
-            )
+            cur.execute("SELECT to_regclass(%s)", (f"public.{EXPECTED_TABLES[0]}",))
             # check each table exists
             for t in EXPECTED_TABLES:
                 cur.execute("SELECT to_regclass(%s)", (f"public.{t}",))
@@ -34,7 +34,7 @@ def test_migrations_idempotent(clean_db: str):
     with psycopg.connect(clean_db) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM schema_migrations")
-            assert cur.fetchone()[0] == 2  # 0001_init + 0002_sync_state_entity
+            assert cur.fetchone()[0] == 3  # 0001_init + 0002_sync_state_entity + 0003_github_prs_issues
 
 
 def test_sync_state_has_entity_key(clean_db: str):

@@ -56,3 +56,42 @@ class CalendarEvent:
     status: str
     category: str
     raw_payload: dict = field(default_factory=dict)
+
+
+@dataclass
+class PullRequest:
+    """A GitHub pull request (normalized from the issues endpoint, which
+    returns PRs alongside issues — distinguished by the ``pull_request`` key)."""
+
+    source_id: str  # node_id
+    repository_source_id: str  # repo full_name (FK to Repo.source_id)
+    number: int
+    title: str
+    state: str
+    author: str | None
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None
+    merged_at: datetime | None
+    is_draft: bool
+    comments_count: int
+    raw_payload: dict = field(default_factory=dict)
+
+
+@dataclass
+class Issue:
+    """A GitHub issue (an item from the issues endpoint with no
+    ``pull_request`` key)."""
+
+    source_id: str  # node_id
+    repository_source_id: str  # repo full_name (FK to Repo.source_id)
+    number: int
+    title: str
+    state: str
+    state_reason: str | None
+    author: str | None
+    created_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None
+    comments_count: int
+    raw_payload: dict = field(default_factory=dict)

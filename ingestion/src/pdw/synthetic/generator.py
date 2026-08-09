@@ -64,24 +64,45 @@ COMMIT_MESSAGES = [
 # Calendar title templates by category (used to exercise categorize()).
 CALENDAR_TEMPLATES = {
     "meeting": [
-        "Daily standup", "Weekly sync", "Sprint planning", "1:1 with manager",
-        "Code review", "Retrospective", "Architecture review", "Demo session",
-        "Triage", "All-hands", "Interview: backend candidate",
+        "Daily standup",
+        "Weekly sync",
+        "Sprint planning",
+        "1:1 with manager",
+        "Code review",
+        "Retrospective",
+        "Architecture review",
+        "Demo session",
+        "Triage",
+        "All-hands",
+        "Interview: backend candidate",
     ],
     "learning": [
-        "Reading: Designing Data-Intensive Apps", "dbt workshop",
-        "Rust tutorial", "Pair programming session", "Online course: SQL",
+        "Reading: Designing Data-Intensive Apps",
+        "dbt workshop",
+        "Rust tutorial",
+        "Pair programming session",
+        "Online course: SQL",
     ],
     "personal": [
-        "Lunch break", "Gym", "Dentist appointment", "Coffee with friend",
-        "Errand", "Doctor appointment",
+        "Lunch break",
+        "Gym",
+        "Dentist appointment",
+        "Coffee with friend",
+        "Errand",
+        "Doctor appointment",
     ],
     "work": [
-        "Focus: ingestion refactor", "Deep work: dbt models",
-        "Inbox zero", "Draft design doc", "Investigate bug report",
+        "Focus: ingestion refactor",
+        "Deep work: dbt models",
+        "Inbox zero",
+        "Draft design doc",
+        "Investigate bug report",
     ],
     "other": [
-        "OOO", "Holiday", "Focus block", "No meetings",
+        "OOO",
+        "Holiday",
+        "Focus block",
+        "No meetings",
     ],
 }
 
@@ -134,8 +155,10 @@ def _generate_commits(
 ) -> list[Commit]:
     commits: list[Commit] = []
     for repo in repos:
-        # Stale/archived repos stop committing 30+ days before the anchor.
-        active_until = anchor - timedelta(days=30) if repo.archived else anchor
+        # Stale/archived repos stop committing before the 30-day recent window
+        # (spec §28): the last allowed commit day is 31+ days before the anchor so
+        # no archived-repo commit lands within the test's 30-day window.
+        active_until = anchor - timedelta(days=31) if repo.archived else anchor
         for d in range(DAYS_BACK):
             day = anchor - timedelta(days=DAYS_BACK - d)
             if day > active_until:
@@ -149,9 +172,7 @@ def _generate_commits(
                 author_name, author_email = rng.choice(AUTHORS)
                 hour = rng.randint(8, 18)
                 minute = rng.randint(0, 59)
-                committed_at = day.replace(
-                    hour=hour, minute=minute, second=0, tzinfo=UTC
-                )
+                committed_at = day.replace(hour=hour, minute=minute, second=0, tzinfo=UTC)
                 sha = _sha(rng)
                 additions = rng.randint(1, 400)
                 deletions = rng.randint(0, 200)
@@ -186,9 +207,7 @@ def _generate_commits(
     return commits
 
 
-def _generate_calendar(
-    rng: random.Random, anchor: datetime
-) -> list[CalendarEvent]:
+def _generate_calendar(rng: random.Random, anchor: datetime) -> list[CalendarEvent]:
     events: list[CalendarEvent] = []
     seq = 0
     for d in range(DAYS_BACK):
@@ -212,14 +231,10 @@ def _generate_calendar(
                 duration = rng.choice([30, 45, 60])
             else:
                 duration = rng.choice([60, 90, 120])
-            start = day.replace(
-                hour=hour, minute=rng.choice([0, 15, 30, 45]), tzinfo=TZ
-            )
+            start = day.replace(hour=hour, minute=rng.choice([0, 15, 30, 45]), tzinfo=TZ)
             hour = min(hour + duration // 60 + 1, 18)
             end = start + timedelta(minutes=duration)
-            attendees = (
-                rng.randint(2, 8) if category == "meeting" else rng.randint(0, 2)
-            )
+            attendees = rng.randint(2, 8) if category == "meeting" else rng.randint(0, 2)
             payload = {
                 "id": f"evt_{seq}",
                 "summary": title,
@@ -245,22 +260,16 @@ def _generate_calendar(
     return events
 
 
-def generate(
-    *, seed: int = SEED, anchor: datetime | None = None
-) -> SyntheticDataset:
+def generate(*, seed: int = SEED, anchor: datetime | None = None) -> SyntheticDataset:
     """Generate a deterministic synthetic dataset.
 
     ``anchor`` defaults to the current UTC midnight so the demo always looks
     recent; the RNG seed makes output deterministic for a given anchor.
     """
     if anchor is None:
-        anchor = datetime.now(UTC).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
+        anchor = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     rng = random.Random(seed)
     repos = _generate_repos(rng, anchor)
     commits = _generate_commits(rng, repos, anchor)
     calendar_events = _generate_calendar(rng, anchor)
-    return SyntheticDataset(
-        repos=repos, commits=commits, calendar_events=calendar_events
-    )
+    return SyntheticDataset(repos=repos, commits=commits, calendar_events=calendar_events)

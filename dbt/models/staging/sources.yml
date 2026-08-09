@@ -17,6 +17,18 @@ sources:
             data_tests: [not_null]
           - name: source_id
             data_tests: [not_null]
+      - name: raw_github_pull_requests
+        columns:
+          - name: source
+            data_tests: [not_null]
+          - name: source_id
+            data_tests: [not_null]
+      - name: raw_github_issues
+        columns:
+          - name: source
+            data_tests: [not_null]
+          - name: source_id
+            data_tests: [not_null]
       - name: raw_calendar_events
         columns:
           - name: source

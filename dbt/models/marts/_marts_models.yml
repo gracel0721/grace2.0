@@ -40,6 +40,36 @@ models:
           - accepted_values:
               values: ['work', 'personal', 'learning', 'meeting', 'other']
 
+  - name: fct_pull_requests
+    description: Pull request fact grain — one row per pull request.
+    columns:
+      - name: pr_key
+        data_tests: [unique, not_null]
+      - name: repository_key
+        data_tests:
+          - relationships:
+              to: ref('dim_repository')
+              field: repository_key
+      - name: state
+        data_tests:
+          - accepted_values:
+              values: ['open', 'closed']
+
+  - name: fct_issues
+    description: Issue fact grain — one row per issue.
+    columns:
+      - name: issue_key
+        data_tests: [unique, not_null]
+      - name: repository_key
+        data_tests:
+          - relationships:
+              to: ref('dim_repository')
+              field: repository_key
+      - name: state
+        data_tests:
+          - accepted_values:
+              values: ['open', 'closed']
+
   - name: mart_daily_activity
     description: One row per date with commit and meeting aggregates.
     columns:
