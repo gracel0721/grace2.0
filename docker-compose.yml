@@ -4,7 +4,10 @@
 # added in later milestones.
 services:
   postgres:
-    image: postgres:16-alpine
+    # Phase 1 of the Personal Developer OS: pgvector-enabled Postgres.
+    # pgvector/pgvector:pg16 is binary-compatible with postgres:16-alpine
+    # (same on-disk format); existing data volume loads unchanged.
+    image: pgvector/pgvector:pg16
     container_name: pdw-postgres
     restart: unless-stopped
     environment:
