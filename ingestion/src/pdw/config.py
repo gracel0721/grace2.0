@@ -50,6 +50,14 @@ class Settings(BaseSettings):
     google_calendar_id: str = Field(
         default="primary", description="Calendar ID to sync (default: primary)"
     )
+    # Spotify (PKCE; no client secret — spec §23). The user creates a Spotify app,
+    # sets SPOTIFY_CLIENT_ID, then `pdw auth spotify` writes SPOTIFY_REFRESH_TOKEN.
+    spotify_client_id: str | None = Field(
+        default=None, description="Spotify OAuth client ID (PKCE app)"
+    )
+    spotify_refresh_token: str | None = Field(
+        default=None, description="Spotify OAuth refresh token"
+    )
 
     @classmethod
     def load(cls) -> Settings:

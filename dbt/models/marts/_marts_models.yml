@@ -76,6 +76,12 @@ models:
       - name: message_key
         data_tests: [unique, not_null]
 
+  - name: fct_spotify_plays
+    description: Spotify play fact grain — one row per recently-played track play.
+    columns:
+      - name: play_key
+        data_tests: [unique, not_null]
+
   - name: mart_daily_activity
     description: One row per date with commit and meeting aggregates.
     columns:

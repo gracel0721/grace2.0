@@ -57,6 +57,4 @@ class FakeHttpClient:
         return self.requests[-1][2].get("params") or {} if self.requests else {}
 
     def params_for(self, path: str) -> list[dict]:
-        return [
-            kw.get("params") or {} for _, u, kw in self.requests if path in u
-        ]
+        return [kw.get("params") or {} for _, u, kw in self.requests if path in u]

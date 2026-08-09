@@ -16,8 +16,7 @@ def get_cursor(conn, connector: str, entity_key: str) -> str | None:
     """Return the stored cursor for an entity, or None if never synced."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT last_cursor FROM sync_state "
-            "WHERE connector = %s AND entity_key = %s",
+            "SELECT last_cursor FROM sync_state WHERE connector = %s AND entity_key = %s",
             (connector, entity_key),
         )
         row = cur.fetchone()

@@ -7,6 +7,7 @@ Subcommands:
     pdw sync github    — sync real GitHub data (spec §6)
     pdw sync calendar  — sync real Google Calendar data (spec §6)
     pdw sync gmail     — sync real Gmail messages (metadata only, spec §6)
+    pdw sync spotify   — sync real Spotify recently-played (spec §6)
 """
 
 from __future__ import annotations
@@ -313,8 +314,66 @@ def gmail(full: bool, since: int) -> None:
     )
 
 
+@sync.command()
+@click.option(
+    "--full", is_flag=True, help="Backfill the lookback window (ignore cursor)."
+)
+@click.option(
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Lookback window in days for the initial backfill.",
+)
+def spotify(full: bool, since: int) -> None:
+    """Sync Spotify recently-played tracks (spec §6, §23)."""
+    from .connectors.base import ConnectorError, HttpClient
+    from .connectors.spotify import SpotifyClient, SpotifyConnector, SpotifyTokenRefresher
+    from .pipeline.runner import run_spotify
+
+    settings = get_settings()
+    missing = [
+        name
+        for name, val in (
+            ("SPOTIFY_CLIENT_ID", settings.spotify_client_id),
+            ("SPOTIFY_REFRESH_TOKEN", settings.spotify_refresh_token),
+        )
+        if not val
+    ]
+    if missing:
+        raise click.ClickException(
+            "Missing Spotify credentials: "
+            + ", ".join(missing)
+            + ". Create a Spotify app, set SPOTIFY_CLIENT_ID in .env, then run "
+            "`pdw auth spotify` (spec §7, §23)."
+        )
+
+    import httpx
+
+    http = HttpClient(httpx.Client(timeout=30.0))
+    try:
+        access_token = SpotifyTokenRefresher(
+            settings.spotify_client_id, http=http
+        ).refresh(settings.spotify_refresh_token)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Spotify auth failed: {exc}") from exc
+
+    spotify_client = SpotifyClient(access_token, http=http)
+    connector = SpotifyConnector(spotify_client)
+    click.echo("Syncing Spotify recently-played...")
+    try:
+        summary = run_spotify(connector, full=full, since_days=since)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Spotify sync failed: {exc}") from exc
+    click.echo(
+        f"  fetched={summary.records_fetched} "
+        f"inserted={summary.records_inserted} updated={summary.records_updated} "
+        f"failed={summary.records_failed} status={summary.status}"
+    )
+
+
 # ---------------------------------------------------------------------------
-# One-time OAuth: `pdw auth google` (spec §23)
+# One-time OAuth: `pdw auth google` / `pdw auth spotify` (spec §23)
 # ---------------------------------------------------------------------------
 def _set_env_var(name: str, value: str) -> None:
     """Set or append a variable in the local .env (repo root)."""
@@ -378,6 +437,42 @@ def google(port: int) -> None:
 
     _set_env_var("GOOGLE_REFRESH_TOKEN", refresh_token)
     click.echo("Refresh token written to .env. You can now run: make sync-calendar")
+
+
+@auth.command("spotify")
+@click.option(
+    "--port",
+    type=int,
+    default=8788,
+    show_default=True,
+    help="Loopback port for the OAuth redirect (match the Spotify app's URI).",
+)
+def auth_spotify(port: int) -> None:
+    """Run the one-time Spotify PKCE flow and store the refresh token in .env.
+
+    First create a Spotify app in the developer dashboard, set its redirect
+    URI to http://localhost:{port}, put SPOTIFY_CLIENT_ID in .env, then run
+    this command.
+    """
+    from .connectors.auth import run_spotify_oauth_flow
+
+    settings = get_settings()
+    if not settings.spotify_client_id:
+        raise click.ClickException(
+            "Missing SPOTIFY_CLIENT_ID. Create a Spotify app "
+            "(https://developer.spotify.com/dashboard), set its redirect URI "
+            f"to http://localhost:{port}, add SPOTIFY_CLIENT_ID to .env, and "
+            "retry (spec §7, §23)."
+        )
+
+    click.echo("Starting Spotify OAuth flow (user-read-recently-played scope)...")
+    try:
+        refresh_token = run_spotify_oauth_flow(settings.spotify_client_id, port=port)
+    except Exception as exc:  # surface a clean message, not a traceback
+        raise click.ClickException(f"OAuth flow failed: {exc}") from exc
+
+    _set_env_var("SPOTIFY_REFRESH_TOKEN", refresh_token)
+    click.echo("Refresh token written to .env. You can now run: make sync-spotify")
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -115,3 +115,22 @@ class Email:
     date: datetime  # internalDate (ms) -> datetime
     snippet: str  # ~200-char preview, NOT the message body
     raw_payload: dict = field(default_factory=dict)
+
+
+@dataclass
+class TrackPlay:
+    """A recently-played Spotify track (spec §6).
+
+    The Spotify recently-played endpoint returns items with no stable ``id`` of
+    their own, so the natural key is ``(track_id, played_at)`` — the same track
+    played at different times is a distinct play. The incremental cursor is
+    ``played_at`` expressed as **epoch milliseconds** (Spotify's ``after``
+    parameter is ms, not seconds — see connectors/spotify.py).
+    """
+
+    source_id: str  # "{track_id}:{played_at_iso}" — unique per play
+    played_at: datetime
+    track_id: str
+    track_name: str
+    artists: str  # comma-joined artist names
+    raw_payload: dict = field(default_factory=dict)

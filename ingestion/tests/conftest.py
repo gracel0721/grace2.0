@@ -23,6 +23,7 @@ RAW_TABLES = [
     "raw_github_issues",
     "raw_calendar_events",
     "raw_gmail_messages",
+    "raw_spotify_plays",
     "pipeline_runs",
     "sync_state",
 ]

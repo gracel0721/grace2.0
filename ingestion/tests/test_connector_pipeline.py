@@ -16,7 +16,14 @@ from pdw.connectors.base import HttpClient
 from pdw.connectors.calendar import CalendarClient, CalendarConnector
 from pdw.connectors.github import GitHubClient, GitHubConnector, GitHubIssuesConnector
 from pdw.connectors.gmail import GmailClient, GmailConnector
-from pdw.pipeline.runner import run_calendar, run_github, run_github_issues, run_gmail
+from pdw.connectors.spotify import SpotifyClient, SpotifyConnector
+from pdw.pipeline.runner import (
+    run_calendar,
+    run_github,
+    run_github_issues,
+    run_gmail,
+    run_spotify,
+)
 from tests.fakes import FakeHttpClient, FakeResponse
 
 # --- GitHub fixtures --------------------------------------------------------
@@ -652,3 +659,106 @@ def test_gmail_credentials_missing(monkeypatch):
     result = CliRunner().invoke(cli.main, ["sync", "gmail"])
     assert result.exit_code != 0
     assert "GOOGLE_REFRESH_TOKEN" in result.output
+
+
+# --- Spotify integration tests --------------------------------------------
+
+
+def _spotify_play(track_id, played_at="2024-06-05T12:00:00.000Z"):
+    return {
+        "played_at": played_at,
+        "track": {"id": track_id, "name": "Song", "artists": [{"name": "A"}]},
+    }
+
+
+def _spotify_fake(pages):
+    fake = FakeHttpClient()
+    for page in pages:
+        fake.add("GET", "/me/player/recently-played", FakeResponse(json_data=page))
+    return fake
+
+
+def _spotify_connector(fake):
+    return SpotifyConnector(SpotifyClient("access", http=HttpClient(fake)))
+
+
+def test_spotify_loads_raw(clean_db: str):
+    page = {
+        "items": [
+            _spotify_play("t1", "2024-06-05T12:00:00.000Z"),
+            _spotify_play("t2", "2024-06-06T12:00:00.000Z"),
+        ]
+    }
+    summary = run_spotify(_spotify_connector(_spotify_fake([page])), url=clean_db)
+
+    assert summary.status == "success"
+    assert _count(clean_db, "raw_spotify_plays", "WHERE source='spotify'") == 2
+    assert (
+        _count(clean_db, "pipeline_runs", "WHERE source='spotify' AND status='success'")
+        == 1
+    )
+    # single 'primary' cursor under the spotify connector
+    assert _count(clean_db, "sync_state", "WHERE connector='spotify'") == 1
+    with psycopg.connect(clean_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT track_id, artists FROM raw_spotify_plays "
+                "WHERE source_id LIKE 't1:%'"
+            )
+            track_id, artists = cur.fetchone()
+            assert track_id == "t1"
+            assert artists == "A"
+
+
+def test_spotify_idempotent(clean_db: str):
+    page = {"items": [_spotify_play("t1", "2024-06-05T12:00:00.000Z")]}
+    first = run_spotify(_spotify_connector(_spotify_fake([page])), url=clean_db)
+    assert first.records_inserted == 1
+
+    second = run_spotify(_spotify_connector(_spotify_fake([page])), url=clean_db)
+    assert second.records_inserted == 0
+    assert second.records_updated == 1
+    assert _count(clean_db, "raw_spotify_plays") == 1  # no duplication
+
+
+def test_spotify_incremental_ms_cursor(clean_db: str):
+    """The cursor is played_at as epoch MILLISECONDS, forwarded as Spotify's
+    `after` param on the next run."""
+    page1 = {"items": [_spotify_play("t1", "2024-06-05T12:00:00.000Z")]}
+    run_spotify(_spotify_connector(_spotify_fake([page1])), url=clean_db)
+
+    with psycopg.connect(clean_db) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT last_cursor FROM sync_state "
+                "WHERE connector='spotify' AND entity_key='primary'"
+            )
+            cursor = cur.fetchone()[0]
+    # 2024-06-05T12:00:00Z == 1717588800000 ms
+    assert cursor == "1717588800000"
+
+    # Run 2: runner must request after=<cursor ms> and load the new play.
+    page2 = {"items": [_spotify_play("t2", "2024-06-06T12:00:00.000Z")]}
+    fake2 = _spotify_fake([page2])
+    second = run_spotify(_spotify_connector(fake2), url=clean_db)
+
+    assert second.records_inserted == 1
+    params = fake2.params_for("/me/player/recently-played")[0]
+    assert params["after"] == "1717588800000"
+    assert _count(clean_db, "raw_spotify_plays") == 2
+
+
+def test_spotify_credentials_missing(monkeypatch):
+    """`pdw sync spotify` with no Spotify creds gives a clear error naming them."""
+    import pdw.cli as cli
+
+    monkeypatch.setattr(
+        cli,
+        "get_settings",
+        lambda: types.SimpleNamespace(
+            spotify_client_id=None, spotify_refresh_token=None
+        ),
+    )
+    result = CliRunner().invoke(cli.main, ["sync", "spotify"])
+    assert result.exit_code != 0
+    assert "SPOTIFY_CLIENT_ID" in result.output

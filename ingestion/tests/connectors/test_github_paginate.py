@@ -21,8 +21,9 @@ def test_get_repos_paginates_until_short_page():
     fake = FakeHttpClient()
     page1 = [_repo(i) for i in range(100)]
     page2 = [_repo(i) for i in range(100, 135)]  # short page -> stop
-    fake.add("GET", "/user/repos", FakeResponse(json_data=page1),
-             FakeResponse(json_data=page2))
+    fake.add(
+        "GET", "/user/repos", FakeResponse(json_data=page1), FakeResponse(json_data=page2)
+    )
     client = GitHubClient("tok", client=HttpClient(fake))
 
     pages = [p for p in client.get_repos()]
@@ -46,12 +47,32 @@ def test_get_repos_stops_on_empty_page():
 
 def test_get_commits_paginates():
     fake = FakeHttpClient()
-    page1 = [{"sha": f"sha-{i}", "commit": {"author": {"name": "a", "email": "e",
-        "date": "2024-06-01T00:00:00Z"}, "message": "m"}} for i in range(100)]
-    page2 = [{"sha": f"sha-{i}", "commit": {"author": {"name": "a", "email": "e",
-        "date": "2024-06-02T00:00:00Z"}, "message": "m"}} for i in range(100, 105)]
-    fake.add("GET", "/repos/gvleverett/repo/commits",
-             FakeResponse(json_data=page1), FakeResponse(json_data=page2))
+    page1 = [
+        {
+            "sha": f"sha-{i}",
+            "commit": {
+                "author": {"name": "a", "email": "e", "date": "2024-06-01T00:00:00Z"},
+                "message": "m",
+            },
+        }
+        for i in range(100)
+    ]
+    page2 = [
+        {
+            "sha": f"sha-{i}",
+            "commit": {
+                "author": {"name": "a", "email": "e", "date": "2024-06-02T00:00:00Z"},
+                "message": "m",
+            },
+        }
+        for i in range(100, 105)
+    ]
+    fake.add(
+        "GET",
+        "/repos/gvleverett/repo/commits",
+        FakeResponse(json_data=page1),
+        FakeResponse(json_data=page2),
+    )
     client = GitHubClient("tok", client=HttpClient(fake))
 
     pages = [p for p in client.get_commits("gvleverett", "repo")]

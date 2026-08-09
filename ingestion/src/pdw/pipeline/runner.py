@@ -31,11 +31,13 @@ from .loaders import (
     CALENDAR,
     GITHUB,
     GMAIL,
+    SPOTIFY,
     RunSummary,
     _load_calendar,
     _load_commits,
     _load_emails,
     _load_issues,
+    _load_plays,
     _load_prs,
     _load_repos,
     record_run,
@@ -45,6 +47,7 @@ GITHUB_CONNECTOR = "github"
 GITHUB_ISSUES_CONNECTOR = "github_issues"
 CALENDAR_CONNECTOR = "calendar"
 GMAIL_CONNECTOR = "gmail"
+SPOTIFY_CONNECTOR = "spotify"
 
 
 def _all_cursors(conn, connector: str) -> dict[str, str]:
@@ -318,6 +321,63 @@ def run_gmail(
     except (AuthError, RateLimitError, NetworkError) as exc:
         _record_failure(url, GMAIL, started, exc)
         raise
+
+
+def run_spotify(
+    connector,
+    *,
+    url: str | None = None,
+    full: bool = False,
+    since_days: int = 90,
+) -> RunSummary:
+    """Sync Spotify recently-played tracks incrementally (spec §12, §23).
+
+    Mirrors ``run_gmail``'s single-entity ``"primary"`` cursor, but the cursor
+    is **epoch milliseconds** (Spotify's ``after`` parameter is ms, not
+    seconds). The cursor is stored/forwarded verbatim as an ms string; the
+    first sync backfills ``since_days`` of history (as ms).
+    """
+    started = datetime.now(UTC)
+    try:
+        cursor = None
+        if not full:
+            with connect(url) as conn:
+                cursor = get_cursor(conn, SPOTIFY_CONNECTOR, "primary")
+
+        if cursor and not full:
+            after_ms = cursor  # already an ms string
+        else:
+            after_ms = str(
+                int((started - timedelta(days=since_days)).timestamp() * 1000)
+            )
+
+        plays = connector.fetch_recently_played(after_ms=after_ms)
+
+        with connect(url) as conn:
+            with conn.cursor() as cur:
+                pi, pu = _load_plays(cur, plays, SPOTIFY)
+            # Advance the cursor to the newest play as ms, or now() if nothing
+            # new came back (so the next run resumes from today).
+            latest = max((p.played_at for p in plays), default=started)
+            set_cursor(conn, SPOTIFY_CONNECTOR, "primary", _to_ms(latest))
+
+            summary = RunSummary(
+                records_fetched=len(plays),
+                records_inserted=pi,
+                records_updated=pu,
+                records_failed=0,
+                status="success",
+            )
+            record_run(conn, SPOTIFY, started, summary)
+        return summary
+    except (AuthError, RateLimitError, NetworkError) as exc:
+        _record_failure(url, SPOTIFY, started, exc)
+        raise
+
+
+def _to_ms(dt: datetime) -> str:
+    """Epoch milliseconds as a string (Spotify `after` cursor)."""
+    return str(int(dt.timestamp() * 1000))
 
 
 def _parse_cursor(cursor: str | None) -> datetime | None:

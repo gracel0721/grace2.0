@@ -41,3 +41,9 @@ sources:
             data_tests: [not_null]
           - name: source_id
             data_tests: [not_null]
+      - name: raw_spotify_plays
+        columns:
+          - name: source
+            data_tests: [not_null]
+          - name: source_id
+            data_tests: [not_null]

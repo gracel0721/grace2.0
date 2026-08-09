@@ -19,11 +19,12 @@ from datetime import datetime
 from psycopg.types.json import Jsonb
 
 from ..db import connect
-from ..models import CalendarEvent, Commit, Email, Issue, PullRequest, Repo
+from ..models import CalendarEvent, Commit, Email, Issue, PullRequest, Repo, TrackPlay
 
 GITHUB = "github"
 CALENDAR = "calendar"
 GMAIL = "gmail"
+SPOTIFY = "spotify"
 
 
 @dataclass
@@ -316,6 +317,42 @@ def _load_emails(cur, emails: Iterable[Email], source: str) -> tuple[int, int]:
     return inserted, updated
 
 
+_PLAY_SQL = """
+INSERT INTO raw_spotify_plays
+    (source, source_id, played_at, track_id, track_name, artists, raw_payload)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (source, source_id) DO UPDATE SET
+    played_at = EXCLUDED.played_at,
+    track_id = EXCLUDED.track_id,
+    track_name = EXCLUDED.track_name,
+    artists = EXCLUDED.artists,
+    raw_payload = EXCLUDED.raw_payload,
+    updated_at = now()
+"""
+
+
+def _load_plays(cur, plays: Iterable[TrackPlay], source: str) -> tuple[int, int]:
+    inserted = updated = 0
+    for p in plays:
+        if _upsert(
+            cur,
+            _PLAY_SQL,
+            (
+                source,
+                p.source_id,
+                p.played_at,
+                p.track_id,
+                p.track_name,
+                p.artists,
+                Jsonb(p.raw_payload or {}),
+            ),
+        ):
+            inserted += 1
+        else:
+            updated += 1
+    return inserted, updated
+
+
 def record_run(conn, source: str, started: datetime, summary: RunSummary) -> None:
     """Write one ``pipeline_runs`` audit row from a RunSummary (spec §24)."""
     with conn.cursor() as cur:
@@ -441,6 +478,33 @@ def load_gmail(
             records_fetched=len(emails),
             records_inserted=ei,
             records_updated=eu,
+            records_failed=0,
+        )
+        if record_run:
+            record_run(conn, source, started, summary)
+    return summary
+
+
+def load_spotify(
+    plays: Iterable[TrackPlay],
+    *,
+    url: str | None = None,
+    source: str = SPOTIFY,
+    record_run: bool = True,
+) -> RunSummary:
+    """Load Spotify recently-played tracks into the raw spotify table."""
+    from datetime import UTC
+
+    plays = list(plays)
+    started = datetime.now(UTC)
+    with connect(url) as conn:
+        with conn.cursor() as cur:
+            pi, pu = _load_plays(cur, plays, source)
+
+        summary = RunSummary(
+            records_fetched=len(plays),
+            records_inserted=pi,
+            records_updated=pu,
             records_failed=0,
         )
         if record_run:

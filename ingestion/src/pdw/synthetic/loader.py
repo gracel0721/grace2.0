@@ -39,9 +39,7 @@ def load(dataset: SyntheticDataset, url: str | None = None) -> RunSummary:
 
         inserted = ri + ci + ei
         updated = ru + cu + eu
-        fetched = len(dataset.repos) + len(dataset.commits) + len(
-            dataset.calendar_events
-        )
+        fetched = len(dataset.repos) + len(dataset.commits) + len(dataset.calendar_events)
         summary = RunSummary(
             records_fetched=fetched,
             records_inserted=inserted,

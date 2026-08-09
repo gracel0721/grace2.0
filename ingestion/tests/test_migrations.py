@@ -11,6 +11,7 @@ EXPECTED_TABLES = [
     "raw_github_issues",
     "raw_calendar_events",
     "raw_gmail_messages",
+    "raw_spotify_plays",
     "pipeline_runs",
     "sync_state",
     "schema_migrations",
@@ -35,8 +36,8 @@ def test_migrations_idempotent(clean_db: str):
     with psycopg.connect(clean_db) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM schema_migrations")
-            # 0001_init + 0002_sync_state_entity + 0003_github_prs_issues + 0004_gmail
-            assert cur.fetchone()[0] == 4
+            # 0001..0005 (init, sync_state_entity, github_prs_issues, gmail, spotify)
+            assert cur.fetchone()[0] == 5
 
 
 def test_sync_state_has_entity_key(clean_db: str):

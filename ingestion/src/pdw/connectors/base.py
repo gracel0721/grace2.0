@@ -64,7 +64,11 @@ class HttpClient:
         return self._request("GET", url, params=params or None, headers=headers)
 
     def post(
-        self, url: str, *, data: dict | None = None, json: Any = None,
+        self,
+        url: str,
+        *,
+        data: dict | None = None,
+        json: Any = None,
         headers: dict | None = None,
     ) -> Any:
         return self._request("POST", url, data=data, json=json, headers=headers)
