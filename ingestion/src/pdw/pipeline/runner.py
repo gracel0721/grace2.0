@@ -30,23 +30,31 @@ from .checkpoints import get_cursor, set_cursor
 from .loaders import (
     CALENDAR,
     GITHUB,
+    GMAIL,
+    SPOTIFY,
     RunSummary,
     _load_calendar,
     _load_commits,
+    _load_emails,
+    _load_issues,
+    _load_plays,
+    _load_prs,
     _load_repos,
     record_run,
 )
 
 GITHUB_CONNECTOR = "github"
+GITHUB_ISSUES_CONNECTOR = "github_issues"
 CALENDAR_CONNECTOR = "calendar"
+GMAIL_CONNECTOR = "gmail"
+SPOTIFY_CONNECTOR = "spotify"
 
 
 def _all_cursors(conn, connector: str) -> dict[str, str]:
     """Return {entity_key: last_cursor} for every entity of a connector."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT entity_key, last_cursor FROM sync_state "
-            "WHERE connector = %s",
+            "SELECT entity_key, last_cursor FROM sync_state WHERE connector = %s",
             (connector,),
         )
         return {row["entity_key"]: row["last_cursor"] for row in cur.fetchall()}
@@ -86,8 +94,10 @@ def run_github(
         partial = False
 
         for repo in repos:
-            since = None if full else (
-                _parse_cursor(cursors.get(repo.source_id)) or default_since
+            since = (
+                None
+                if full
+                else (_parse_cursor(cursors.get(repo.source_id)) or default_since)
             )
             try:
                 commits_by_repo[repo.source_id] = connector.fetch_commits(
@@ -117,7 +127,9 @@ def run_github(
                     if commits:
                         latest = max(c.committed_at for c in commits)
                         set_cursor(
-                            conn, GITHUB_CONNECTOR, repo.source_id,
+                            conn,
+                            GITHUB_CONNECTOR,
+                            repo.source_id,
                             latest.isoformat(),
                         )
 
@@ -126,6 +138,89 @@ def run_github(
                 records_fetched=fetched,
                 records_inserted=ri + ci,
                 records_updated=ru + cu,
+                records_failed=failures,
+                status="partial" if partial else "success",
+            )
+            record_run(conn, GITHUB, started, summary)
+        return summary
+    except (AuthError, RateLimitError, NetworkError) as exc:
+        _record_failure(url, GITHUB, started, exc)
+        raise
+
+
+def run_github_issues(
+    connector,
+    *,
+    url: str | None = None,
+    full: bool = False,
+    since_days: int = 90,
+) -> RunSummary:
+    """Sync GitHub pull requests + issues incrementally (spec §12).
+
+    Mirrors ``run_github``: fetch repos, then per repo fetch issues+PRs with a
+    ``since`` cursor (the max ``updated_at`` already seen), and load everything
+    in one transaction. Repos are loaded too so the dbt ``repository_key``
+    relationship resolves even when commits haven't been synced. Per-repo
+    failures (one repo 404s) are counted as ``partial``; abort-level errors
+    (auth/rate-limit/network) record a ``failed`` run and re-raise.
+    """
+    started = datetime.now(UTC)
+    try:
+        repos = connector.fetch_repos()  # network; may raise Auth/RateLimit/Net
+
+        with connect(url) as conn:
+            cursors = {} if full else _all_cursors(conn, GITHUB_ISSUES_CONNECTOR)
+
+        default_since = started - timedelta(days=since_days)
+        results: dict[str, tuple[list, list]] = {}
+        failures = 0
+        partial = False
+
+        for repo in repos:
+            since = (
+                None
+                if full
+                else (_parse_cursor(cursors.get(repo.source_id)) or default_since)
+            )
+            try:
+                results[repo.source_id] = connector.fetch_issues_prs(repo, since=since)
+            except (ApiError, MalformedRecordError):  # per-repo -> skip, continue
+                failures += 1
+                partial = True
+
+        # Single write transaction: load repos + issues + PRs, advance cursors.
+        total_items = 0
+        with connect(url) as conn:
+            with conn.cursor() as cur:
+                ri, ru = _load_repos(cur, repos, GITHUB)
+                pi = pu = ii = iu = 0
+                for repo in repos:
+                    res = results.get(repo.source_id)
+                    if res is None:
+                        continue
+                    issues, prs = res
+                    a, b = _load_issues(cur, issues, GITHUB)
+                    ii += a
+                    iu += b
+                    c, d = _load_prs(cur, prs, GITHUB)
+                    pi += c
+                    pu += d
+                    total_items += len(issues) + len(prs)
+                    items = issues + prs
+                    if items:
+                        latest = max(x.updated_at for x in items)
+                        set_cursor(
+                            conn,
+                            GITHUB_ISSUES_CONNECTOR,
+                            repo.source_id,
+                            latest.isoformat(),
+                        )
+
+            fetched = len(repos) + total_items
+            summary = RunSummary(
+                records_fetched=fetched,
+                records_inserted=ri + pi + ii,
+                records_updated=ru + pu + iu,
                 records_failed=failures,
                 status="partial" if partial else "success",
             )
@@ -155,9 +250,7 @@ def run_calendar(
             events = connector.fetch_events(updated_min=_parse_cursor(cursor))
         else:
             time_min = started - timedelta(days=since_days)
-            events = connector.fetch_events(
-                time_min=time_min, time_max=started
-            )
+            events = connector.fetch_events(time_min=time_min, time_max=started)
 
         with connect(url) as conn:
             with conn.cursor() as cur:
@@ -177,6 +270,114 @@ def run_calendar(
     except (AuthError, RateLimitError, NetworkError) as exc:
         _record_failure(url, CALENDAR, started, exc)
         raise
+
+
+def run_gmail(
+    connector,
+    *,
+    url: str | None = None,
+    full: bool = False,
+    since_days: int = 90,
+) -> RunSummary:
+    """Sync Gmail messages incrementally, metadata only (spec §3, §12, §23).
+
+    Mirrors ``run_calendar``'s single-entity ``"primary"`` cursor. Gmail search
+    is date-granular (``q=after:YYYY/MM/DD``), so the cursor (the newest message
+    ``date`` seen) is converted to a day boundary; the overlap on the cursor day
+    is harmless because raw upserts are idempotent (spec §13). With no cursor
+    the first sync backfills ``since_days`` of history.
+    """
+    started = datetime.now(UTC)
+    try:
+        cursor = None
+        if not full:
+            with connect(url) as conn:
+                cursor = get_cursor(conn, GMAIL_CONNECTOR, "primary")
+
+        if cursor and not full:
+            after_date = _parse_cursor(cursor).strftime("%Y/%m/%d")
+        else:
+            after_date = (started - timedelta(days=since_days)).strftime("%Y/%m/%d")
+
+        emails = connector.fetch_messages(after=after_date)
+
+        with connect(url) as conn:
+            with conn.cursor() as cur:
+                ei, eu = _load_emails(cur, emails, GMAIL)
+            # Advance the cursor to the newest message date seen, or now() if the
+            # mailbox returned nothing new (so the next run resumes from today).
+            latest = max((e.date for e in emails), default=started)
+            set_cursor(conn, GMAIL_CONNECTOR, "primary", latest.isoformat())
+
+            summary = RunSummary(
+                records_fetched=len(emails),
+                records_inserted=ei,
+                records_updated=eu,
+                records_failed=0,
+                status="success",
+            )
+            record_run(conn, GMAIL, started, summary)
+        return summary
+    except (AuthError, RateLimitError, NetworkError) as exc:
+        _record_failure(url, GMAIL, started, exc)
+        raise
+
+
+def run_spotify(
+    connector,
+    *,
+    url: str | None = None,
+    full: bool = False,
+    since_days: int = 90,
+) -> RunSummary:
+    """Sync Spotify recently-played tracks incrementally (spec §12, §23).
+
+    Mirrors ``run_gmail``'s single-entity ``"primary"`` cursor, but the cursor
+    is **epoch milliseconds** (Spotify's ``after`` parameter is ms, not
+    seconds). The cursor is stored/forwarded verbatim as an ms string; the
+    first sync backfills ``since_days`` of history (as ms).
+    """
+    started = datetime.now(UTC)
+    try:
+        cursor = None
+        if not full:
+            with connect(url) as conn:
+                cursor = get_cursor(conn, SPOTIFY_CONNECTOR, "primary")
+
+        if cursor and not full:
+            after_ms = cursor  # already an ms string
+        else:
+            after_ms = str(
+                int((started - timedelta(days=since_days)).timestamp() * 1000)
+            )
+
+        plays = connector.fetch_recently_played(after_ms=after_ms)
+
+        with connect(url) as conn:
+            with conn.cursor() as cur:
+                pi, pu = _load_plays(cur, plays, SPOTIFY)
+            # Advance the cursor to the newest play as ms, or now() if nothing
+            # new came back (so the next run resumes from today).
+            latest = max((p.played_at for p in plays), default=started)
+            set_cursor(conn, SPOTIFY_CONNECTOR, "primary", _to_ms(latest))
+
+            summary = RunSummary(
+                records_fetched=len(plays),
+                records_inserted=pi,
+                records_updated=pu,
+                records_failed=0,
+                status="success",
+            )
+            record_run(conn, SPOTIFY, started, summary)
+        return summary
+    except (AuthError, RateLimitError, NetworkError) as exc:
+        _record_failure(url, SPOTIFY, started, exc)
+        raise
+
+
+def _to_ms(dt: datetime) -> str:
+    """Epoch milliseconds as a string (Spotify `after` cursor)."""
+    return str(int(dt.timestamp() * 1000))
 
 
 def _parse_cursor(cursor: str | None) -> datetime | None:

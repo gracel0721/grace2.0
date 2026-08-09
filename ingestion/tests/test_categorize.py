@@ -41,7 +41,14 @@ def test_empty_title_is_other():
 
 def test_all_categories_covered():
     # The generator should be able to produce every accepted category.
-    produced = {categorize(t) for t in [
-        "Daily standup", "dbt workshop", "Lunch break", "OOO", "Write design doc"
-    ]}
+    produced = {
+        categorize(t)
+        for t in [
+            "Daily standup",
+            "dbt workshop",
+            "Lunch break",
+            "OOO",
+            "Write design doc",
+        ]
+    }
     assert produced.issubset(set(CATEGORIES))

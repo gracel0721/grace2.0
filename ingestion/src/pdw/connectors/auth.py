@@ -20,8 +20,24 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import httpx
 
 CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+SPREADSHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+
+# Consolidated scopes for every Google source in the warehouse (spec §23).
+# The one-time `pdw auth google` flow requests all of these together so the
+# single refresh token it mints is authorized for calendar, gmail, and sheets
+# (job applications) without a later re-auth. Google accepts a space-delimited
+# scope string in the authorization URL.
+GOOGLE_SCOPES = " ".join(
+    [CALENDAR_READONLY_SCOPE, GMAIL_READONLY_SCOPE, SPREADSHEETS_READONLY_SCOPE]
+)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+# --- Spotify (PKCE, no client secret — spec §23) ---------------------------
+SPOTIFY_AUTH_URL = "https://accounts.spotify.com/authorize"
+SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_RECENTLY_PLAYED_SCOPE = "user-read-recently-played"
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -128,7 +144,7 @@ def run_oauth_flow(
     client_secret: str,
     *,
     port: int = 8787,
-    scope: str = CALENDAR_READONLY_SCOPE,
+    scope: str = GOOGLE_SCOPES,
     open_browser: bool = True,
 ) -> str:
     """Run the full one-time flow and return the refresh token."""
@@ -143,7 +159,68 @@ def run_oauth_flow(
     print(f"Waiting for authorization on {redirect_uri} ...")
 
     code = _wait_for_code(port)
-    tokens = exchange_code(
-        client_id, client_secret, code, redirect_uri, verifier
-    )
+    tokens = exchange_code(client_id, client_secret, code, redirect_uri, verifier)
     return tokens["refresh_token"]
+
+
+def run_spotify_oauth_flow(
+    client_id: str,
+    *,
+    port: int = 8788,
+    scope: str = SPOTIFY_RECENTLY_PLAYED_SCOPE,
+    open_browser: bool = True,
+) -> str:
+    """One-time Spotify PKCE flow (no client secret) → refresh token.
+
+    Analog of ``run_oauth_flow`` for Spotify's installed-app PKCE flow. The
+    user creates a Spotify app (dev dashboard), sets ``SPOTIFY_CLIENT_ID`` in
+    ``.env``, then runs ``pdw auth spotify``; this mints a ``refresh_token``
+    written back to ``.env`` (spec §23). The redirect URI must be registered
+    on the Spotify app as ``http://localhost:{port}``.
+    """
+    verifier, challenge = _pkce_pair()
+    redirect_uri = f"http://localhost:{port}"
+    auth_url = (
+        f"{SPOTIFY_AUTH_URL}?"
+        + urlencode(
+            {
+                "response_type": "code",
+                "client_id": client_id,
+                "scope": scope,
+                "redirect_uri": redirect_uri,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+            }
+        )
+    )
+
+    if open_browser:
+        webbrowser.open(auth_url)
+    print("\nOpen this URL in your browser if it did not open automatically:\n")
+    print(f"  {auth_url}\n")
+    print(f"Waiting for authorization on {redirect_uri} ...")
+
+    code = _wait_for_code(port)
+    resp = httpx.post(
+        SPOTIFY_TOKEN_URL,
+        data={
+            "code": code,
+            "client_id": client_id,
+            "grant_type": "authorization_code",
+            "redirect_uri": redirect_uri,
+            "code_verifier": verifier,
+        },
+        timeout=30.0,
+    )
+    body = resp.json()
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Spotify token exchange failed ({resp.status_code}): "
+            f"{body.get('error_description', body.get('error', 'unknown'))}"
+        )
+    if "refresh_token" not in body:
+        raise RuntimeError(
+            "no refresh_token in Spotify response — re-run, or revoke the app "
+            "at https://www.spotify.com/account/apps/ and retry."
+        )
+    return body["refresh_token"]

@@ -6,6 +6,8 @@ Subcommands:
     pdw status         — show recent pipeline runs (spec §24)
     pdw sync github    — sync real GitHub data (spec §6)
     pdw sync calendar  — sync real Google Calendar data (spec §6)
+    pdw sync gmail     — sync real Gmail messages (metadata only, spec §6)
+    pdw sync spotify   — sync real Spotify recently-played (spec §6)
 """
 
 from __future__ import annotations
@@ -100,7 +102,10 @@ def sync() -> None:
 @sync.command()
 @click.option("--full", is_flag=True, help="Backfill all history (ignore cursors).")
 @click.option(
-    "--since", type=int, default=90, show_default=True,
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
     help="Lookback window in days for the first/incremental sync.",
 )
 def github(full: bool, since: int) -> None:
@@ -111,9 +116,7 @@ def github(full: bool, since: int) -> None:
 
     settings = get_settings()
     if not settings.github_token:
-        raise click.ClickException(
-            "GITHUB_TOKEN is not set. Add it to .env (spec §7)."
-        )
+        raise click.ClickException("GITHUB_TOKEN is not set. Add it to .env (spec §7).")
 
     import httpx
 
@@ -141,12 +144,60 @@ def github(full: bool, since: int) -> None:
     )
 
 
+@sync.command("github-issues")
+@click.option("--full", is_flag=True, help="Backfill all history (ignore cursors).")
+@click.option(
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Lookback window in days for the first/incremental sync.",
+)
+def github_issues(full: bool, since: int) -> None:
+    """Sync GitHub pull requests + issues (spec §6)."""
+    from .connectors.base import ConnectorError, HttpClient
+    from .connectors.github import GitHubClient, GitHubIssuesConnector
+    from .pipeline.runner import run_github_issues
+
+    settings = get_settings()
+    if not settings.github_token:
+        raise click.ClickException("GITHUB_TOKEN is not set. Add it to .env (spec §7).")
+
+    import httpx
+
+    client = HttpClient(
+        httpx.Client(
+            base_url="https://api.github.com",
+            headers={
+                "Authorization": f"Bearer {settings.github_token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=30.0,
+        )
+    )
+    connector = GitHubIssuesConnector(GitHubClient(settings.github_token, client=client))
+    click.echo("Syncing GitHub PRs + Issues...")
+    try:
+        summary = run_github_issues(connector, full=full, since_days=since)
+    except ConnectorError as exc:
+        raise click.ClickException(f"GitHub sync failed: {exc}") from exc
+    click.echo(
+        f"  fetched={summary.records_fetched} "
+        f"inserted={summary.records_inserted} updated={summary.records_updated} "
+        f"failed={summary.records_failed} status={summary.status}"
+    )
+
+
 @sync.command()
 @click.option(
     "--full", is_flag=True, help="Backfill the lookback window (ignore cursor)."
 )
 @click.option(
-    "--since", type=int, default=90, show_default=True,
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
     help="Lookback window in days for the initial backfill.",
 )
 def calendar(full: bool, since: int) -> None:
@@ -171,7 +222,8 @@ def calendar(full: bool, since: int) -> None:
     ]
     if missing:
         raise click.ClickException(
-            "Missing Google credentials: " + ", ".join(missing)
+            "Missing Google credentials: "
+            + ", ".join(missing)
             + ". Add them to .env (spec §7, §23)."
         )
 
@@ -188,9 +240,7 @@ def calendar(full: bool, since: int) -> None:
         raise click.ClickException(f"Google auth failed: {exc}") from exc
 
     cal_client = CalendarClient(access_token, http=http)
-    connector = CalendarConnector(
-        cal_client, calendar_id=settings.google_calendar_id
-    )
+    connector = CalendarConnector(cal_client, calendar_id=settings.google_calendar_id)
     click.echo("Syncing Google Calendar...")
     try:
         summary = run_calendar(connector, full=full, since_days=since)
@@ -203,8 +253,127 @@ def calendar(full: bool, since: int) -> None:
     )
 
 
+@sync.command()
+@click.option(
+    "--full", is_flag=True, help="Backfill the lookback window (ignore cursor)."
+)
+@click.option(
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Lookback window in days for the initial backfill.",
+)
+def gmail(full: bool, since: int) -> None:
+    """Sync Gmail messages — metadata only (spec §3, §23)."""
+    from .connectors.base import ConnectorError, HttpClient
+    from .connectors.calendar import GoogleTokenRefresher
+    from .connectors.gmail import GmailClient, GmailConnector
+    from .pipeline.runner import run_gmail
+
+    settings = get_settings()
+    missing = [
+        name
+        for name, val in (
+            ("GOOGLE_CLIENT_ID", settings.google_client_id),
+            ("GOOGLE_CLIENT_SECRET", settings.google_client_secret),
+            ("GOOGLE_REFRESH_TOKEN", settings.google_refresh_token),
+        )
+        if not val
+    ]
+    if missing:
+        raise click.ClickException(
+            "Missing Google credentials: "
+            + ", ".join(missing)
+            + ". Add them to .env (spec §7, §23)."
+        )
+
+    import httpx
+
+    http = HttpClient(httpx.Client(timeout=30.0))
+    try:
+        access_token = GoogleTokenRefresher(
+            settings.google_client_id,
+            settings.google_client_secret,
+            http=http,
+        ).refresh(settings.google_refresh_token)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Google auth failed: {exc}") from exc
+
+    gmail_client = GmailClient(access_token, http=http)
+    connector = GmailConnector(gmail_client)
+    click.echo("Syncing Gmail (metadata only)...")
+    try:
+        summary = run_gmail(connector, full=full, since_days=since)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Gmail sync failed: {exc}") from exc
+    click.echo(
+        f"  fetched={summary.records_fetched} "
+        f"inserted={summary.records_inserted} updated={summary.records_updated} "
+        f"failed={summary.records_failed} status={summary.status}"
+    )
+
+
+@sync.command()
+@click.option(
+    "--full", is_flag=True, help="Backfill the lookback window (ignore cursor)."
+)
+@click.option(
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Lookback window in days for the initial backfill.",
+)
+def spotify(full: bool, since: int) -> None:
+    """Sync Spotify recently-played tracks (spec §6, §23)."""
+    from .connectors.base import ConnectorError, HttpClient
+    from .connectors.spotify import SpotifyClient, SpotifyConnector, SpotifyTokenRefresher
+    from .pipeline.runner import run_spotify
+
+    settings = get_settings()
+    missing = [
+        name
+        for name, val in (
+            ("SPOTIFY_CLIENT_ID", settings.spotify_client_id),
+            ("SPOTIFY_REFRESH_TOKEN", settings.spotify_refresh_token),
+        )
+        if not val
+    ]
+    if missing:
+        raise click.ClickException(
+            "Missing Spotify credentials: "
+            + ", ".join(missing)
+            + ". Create a Spotify app, set SPOTIFY_CLIENT_ID in .env, then run "
+            "`pdw auth spotify` (spec §7, §23)."
+        )
+
+    import httpx
+
+    http = HttpClient(httpx.Client(timeout=30.0))
+    try:
+        access_token = SpotifyTokenRefresher(
+            settings.spotify_client_id, http=http
+        ).refresh(settings.spotify_refresh_token)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Spotify auth failed: {exc}") from exc
+
+    spotify_client = SpotifyClient(access_token, http=http)
+    connector = SpotifyConnector(spotify_client)
+    click.echo("Syncing Spotify recently-played...")
+    try:
+        summary = run_spotify(connector, full=full, since_days=since)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Spotify sync failed: {exc}") from exc
+    click.echo(
+        f"  fetched={summary.records_fetched} "
+        f"inserted={summary.records_inserted} updated={summary.records_updated} "
+        f"failed={summary.records_failed} status={summary.status}"
+    )
+
+
 # ---------------------------------------------------------------------------
-# One-time OAuth: `pdw auth google` (spec §23)
+# One-time OAuth: `pdw auth google` / `pdw auth spotify` (spec §23)
 # ---------------------------------------------------------------------------
 def _set_env_var(name: str, value: str) -> None:
     """Set or append a variable in the local .env (repo root)."""
@@ -229,7 +398,10 @@ def auth() -> None:
 
 @auth.command()
 @click.option(
-    "--port", type=int, default=8787, show_default=True,
+    "--port",
+    type=int,
+    default=8787,
+    show_default=True,
     help="Loopback port for the OAuth redirect.",
 )
 def google(port: int) -> None:
@@ -247,11 +419,13 @@ def google(port: int) -> None:
     ]
     if missing:
         raise click.ClickException(
-            "Missing " + ", ".join(missing)
-            + ". Add them to .env first (spec §7, §23)."
+            "Missing " + ", ".join(missing) + ". Add them to .env first (spec §7, §23)."
         )
 
-    click.echo("Starting Google OAuth flow (calendar.readonly scope)...")
+    click.echo(
+        "Starting Google OAuth flow "
+        "(calendar.readonly + gmail.readonly + spreadsheets.readonly scopes)..."
+    )
     try:
         refresh_token = run_oauth_flow(
             settings.google_client_id,
@@ -263,6 +437,42 @@ def google(port: int) -> None:
 
     _set_env_var("GOOGLE_REFRESH_TOKEN", refresh_token)
     click.echo("Refresh token written to .env. You can now run: make sync-calendar")
+
+
+@auth.command("spotify")
+@click.option(
+    "--port",
+    type=int,
+    default=8788,
+    show_default=True,
+    help="Loopback port for the OAuth redirect (match the Spotify app's URI).",
+)
+def auth_spotify(port: int) -> None:
+    """Run the one-time Spotify PKCE flow and store the refresh token in .env.
+
+    First create a Spotify app in the developer dashboard, set its redirect
+    URI to http://localhost:{port}, put SPOTIFY_CLIENT_ID in .env, then run
+    this command.
+    """
+    from .connectors.auth import run_spotify_oauth_flow
+
+    settings = get_settings()
+    if not settings.spotify_client_id:
+        raise click.ClickException(
+            "Missing SPOTIFY_CLIENT_ID. Create a Spotify app "
+            "(https://developer.spotify.com/dashboard), set its redirect URI "
+            f"to http://localhost:{port}, add SPOTIFY_CLIENT_ID to .env, and "
+            "retry (spec §7, §23)."
+        )
+
+    click.echo("Starting Spotify OAuth flow (user-read-recently-played scope)...")
+    try:
+        refresh_token = run_spotify_oauth_flow(settings.spotify_client_id, port=port)
+    except Exception as exc:  # surface a clean message, not a traceback
+        raise click.ClickException(f"OAuth flow failed: {exc}") from exc
+
+    _set_env_var("SPOTIFY_REFRESH_TOKEN", refresh_token)
+    click.echo("Refresh token written to .env. You can now run: make sync-spotify")
 
 
 if __name__ == "__main__":  # pragma: no cover

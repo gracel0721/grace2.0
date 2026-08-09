@@ -46,7 +46,8 @@ def test_has_active_and_stale_repos():
     assert len(archived) >= 2
     for repo in archived:
         recent = [
-            c for c in ds.commits
+            c
+            for c in ds.commits
             if c.repository_source_id == repo.source_id
             and c.committed_at > anchor - timedelta(days=30)
         ]

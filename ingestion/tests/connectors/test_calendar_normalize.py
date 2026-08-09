@@ -7,7 +7,8 @@ from pdw.connectors.calendar import CalendarConnector
 
 # `_normalize_event` only uses `calendar_id`, so a None client is safe here.
 CONNECTOR = CalendarConnector(
-    client=None, calendar_id="primary"  # type: ignore[arg-type]
+    client=None,
+    calendar_id="primary",  # type: ignore[arg-type]
 )
 
 
@@ -17,10 +18,12 @@ def test_timed_event():
         "status": "confirmed",
         "summary": "Weekly sync",
         "start": {
-            "dateTime": "2024-06-01T09:00:00-04:00", "timeZone": "America/New_York",
+            "dateTime": "2024-06-01T09:00:00-04:00",
+            "timeZone": "America/New_York",
         },
         "end": {
-            "dateTime": "2024-06-01T09:30:00-04:00", "timeZone": "America/New_York",
+            "dateTime": "2024-06-01T09:30:00-04:00",
+            "timeZone": "America/New_York",
         },
         "attendees": [{"email": "a@x"}, {"email": "b@x"}],
     }
@@ -66,7 +69,9 @@ def test_cancelled_event_loaded_with_nulls():
 
 def test_category_via_categorize():
     raw = {
-        "id": "evt4", "status": "confirmed", "summary": "Gym",
+        "id": "evt4",
+        "status": "confirmed",
+        "summary": "Gym",
         "start": {"dateTime": "2024-06-01T12:00:00Z", "timeZone": "UTC"},
         "end": {"dateTime": "2024-06-01T13:00:00Z", "timeZone": "UTC"},
     }

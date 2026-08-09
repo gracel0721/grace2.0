@@ -18,7 +18,8 @@ def _event(i: int) -> dict:
 def test_get_events_paginates_via_page_token():
     fake = FakeHttpClient()
     fake.add(
-        "GET", "/calendars/primary/events",
+        "GET",
+        "/calendars/primary/events",
         FakeResponse(
             json_data={"items": [_event(0), _event(1)], "nextPageToken": "tok2"}
         ),

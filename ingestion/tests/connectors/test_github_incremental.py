@@ -19,9 +19,7 @@ def _commit(iso: str, sha: str = "sha") -> dict:
 
 def test_get_commits_passes_since_param():
     """When a cursor is supplied it is forwarded as the `since` query param."""
-    fake = FakeHttpClient().add(
-        "GET", "/repos/o/r/commits", FakeResponse(json_data=[])
-    )
+    fake = FakeHttpClient().add("GET", "/repos/o/r/commits", FakeResponse(json_data=[]))
     client = GitHubClient("tok", client=HttpClient(fake))
 
     since = datetime(2024, 6, 1, 12, 0, tzinfo=UTC)
@@ -32,9 +30,7 @@ def test_get_commits_passes_since_param():
 
 
 def test_get_commits_omits_since_when_none():
-    fake = FakeHttpClient().add(
-        "GET", "/repos/o/r/commits", FakeResponse(json_data=[])
-    )
+    fake = FakeHttpClient().add("GET", "/repos/o/r/commits", FakeResponse(json_data=[]))
     client = GitHubClient("tok", client=HttpClient(fake))
 
     list(client.get_commits("o", "r", since=None))
@@ -47,7 +43,8 @@ def test_get_commits_returns_newest_only_is_caller_concern():
     """The client just forwards `since`; filtering is the API's job. We verify
     the cursor value round-trips as an ISO string."""
     fake = FakeHttpClient().add(
-        "GET", "/repos/o/r/commits",
+        "GET",
+        "/repos/o/r/commits",
         FakeResponse(json_data=[_commit("2024-06-05T00:00:00Z", "s1")]),
     )
     client = GitHubClient("tok", client=HttpClient(fake))

@@ -22,7 +22,7 @@ from datetime import datetime
 
 import httpx
 
-from ..models import Commit, Repo
+from ..models import Commit, Issue, PullRequest, Repo
 from .base import ApiError, HttpClient, MalformedRecordError
 
 API_ROOT = "https://api.github.com"
@@ -58,7 +58,10 @@ class GitHubClient:
         page = 1
         while True:
             data = self._http.get(
-                "/user/repos", per_page=PER_PAGE, page=page, sort="pushed",
+                "/user/repos",
+                per_page=PER_PAGE,
+                page=page,
+                sort="pushed",
                 direction="desc",
             ).json()
             if not data:
@@ -94,6 +97,37 @@ class GitHubClient:
             if exc.status_code == 409:
                 return  # empty repo — not an error
             raise
+
+    def get_issues(
+        self, owner: str, repo: str, since: datetime | None = None
+    ) -> Iterator[list[dict]]:
+        """Yield pages of issues **and** pull requests for a repository since a
+        cursor.
+
+        The GitHub issues endpoint returns PRs too (every PR is an issue); the
+        connector splits them on the ``pull_request`` key. ``since`` filters to
+        items updated at or after the cursor (incremental sync). ``state=all``
+        so closed items are returned for backfill.
+        """
+        params: dict = {
+            "per_page": PER_PAGE,
+            "state": "all",
+            "sort": "updated",
+            "direction": "asc",
+        }
+        if since is not None:
+            params["since"] = since.isoformat()
+        path = f"/repos/{owner}/{repo}/issues"
+        page = 1
+        while True:
+            params["page"] = page
+            data = self._http.get(path, **params).json()
+            if not data:
+                return
+            yield data
+            if len(data) < PER_PAGE:
+                return
+            page += 1
 
 
 class GitHubConnector:
@@ -153,5 +187,78 @@ class GitHubConnector:
             additions=None,  # list-commits does not return stats
             deletions=None,
             message=raw["commit"]["message"],
+            raw_payload=raw,
+        )
+
+
+class GitHubIssuesConnector:
+    """Normalizes the GitHub issues endpoint into Issues + PullRequests.
+
+    The ``GET /repos/{owner}/{repo}/issues`` endpoint returns both issues and
+    PRs (every PR is an issue). This connector fetches the user's repos (reusing
+    ``GitHubConnector`` so repo normalization isn't duplicated), then per repo
+    fetches issues/PRs with a ``since`` cursor and splits each item on the
+    ``pull_request`` key.
+    """
+
+    def __init__(self, client: GitHubClient) -> None:
+        self._client = client
+        self._repo_connector = GitHubConnector(client)
+
+    def fetch_repos(self) -> list[Repo]:
+        return self._repo_connector.fetch_repos()
+
+    def fetch_issues_prs(
+        self, repo: Repo, since: datetime | None = None
+    ) -> tuple[list[Issue], list[PullRequest]]:
+        """Fetch issues + PRs for a repo since a cursor; split into two lists."""
+        issues: list[Issue] = []
+        prs: list[PullRequest] = []
+        for page in self._client.get_issues(repo.owner, repo.name, since=since):
+            for raw in page:
+                try:
+                    if raw.get("pull_request") is not None:
+                        prs.append(self._normalize_pull_request(repo, raw))
+                    else:
+                        issues.append(self._normalize_issue(repo, raw))
+                except (KeyError, TypeError) as exc:
+                    raise MalformedRecordError(
+                        f"could not normalize issue/PR in {repo.full_name}: {exc}"
+                    ) from exc
+        return issues, prs
+
+    @staticmethod
+    def _normalize_issue(repo: Repo, raw: dict) -> Issue:
+        return Issue(
+            source_id=raw["node_id"],
+            repository_source_id=repo.source_id,
+            number=raw["number"],
+            title=raw["title"],
+            state=raw["state"],
+            state_reason=raw.get("state_reason"),
+            author=(raw.get("user") or {}).get("login"),
+            created_at=_parse_dt(raw["created_at"]),
+            updated_at=_parse_dt(raw["updated_at"]),
+            closed_at=_parse_dt(raw["closed_at"]) if raw.get("closed_at") else None,
+            comments_count=raw.get("comments", 0),
+            raw_payload=raw,
+        )
+
+    @staticmethod
+    def _normalize_pull_request(repo: Repo, raw: dict) -> PullRequest:
+        pr = raw["pull_request"]
+        return PullRequest(
+            source_id=raw["node_id"],
+            repository_source_id=repo.source_id,
+            number=raw["number"],
+            title=raw["title"],
+            state=raw["state"],
+            author=(raw.get("user") or {}).get("login"),
+            created_at=_parse_dt(raw["created_at"]),
+            updated_at=_parse_dt(raw["updated_at"]),
+            closed_at=_parse_dt(raw["closed_at"]) if raw.get("closed_at") else None,
+            merged_at=_parse_dt(pr["merged_at"]) if pr.get("merged_at") else None,
+            is_draft=raw.get("draft", False),
+            comments_count=raw.get("comments", 0),
             raw_payload=raw,
         )

@@ -9,7 +9,8 @@ from tests.fakes import FakeHttpClient, FakeResponse
 
 def test_refresh_returns_access_token():
     fake = FakeHttpClient().add(
-        "POST", "/token",
+        "POST",
+        "/token",
         FakeResponse(json_data={"access_token": "abc123", "expires_in": 3600}),
     )
     refresher = GoogleTokenRefresher("cid", "secret", http=HttpClient(fake))
@@ -28,7 +29,8 @@ def test_refresh_returns_access_token():
 def test_invalid_grant_raises_auth_error():
     """A 400 invalid_grant means the refresh token is revoked (spec §25)."""
     fake = FakeHttpClient().add(
-        "POST", "/token",
+        "POST",
+        "/token",
         FakeResponse(status_code=400, json_data={"error": "invalid_grant"}),
     )
     refresher = GoogleTokenRefresher("cid", "secret", http=HttpClient(fake))

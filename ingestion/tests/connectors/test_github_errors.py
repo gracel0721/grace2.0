@@ -29,9 +29,11 @@ def test_401_raises_auth_error():
 
 def test_rate_limit_exhausted_raises_rate_limit_error():
     fake = FakeHttpClient().add(
-        "GET", "/user/repos",
+        "GET",
+        "/user/repos",
         FakeResponse(
-            status_code=403, json_data={},
+            status_code=403,
+            json_data={},
             headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1700000000"},
         ),
     )
@@ -70,7 +72,8 @@ def test_404_on_commits_raises_api_error():
 def test_network_error_retried_then_raised():
     """A transport failure is retried once, then surfaces as a NetworkError."""
     fake = FakeHttpClient().add(
-        "GET", "/user/repos",
+        "GET",
+        "/user/repos",
         httpx.ConnectError("boom"),  # transport failure
         httpx.ConnectError("boom"),  # retry also fails
     )

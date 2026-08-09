@@ -17,9 +17,11 @@ from pdw.connectors.auth import (
 
 def test_pkce_challenge_is_s256_of_verifier():
     verifier, challenge = _pkce_pair()
-    expected = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode("ascii")).digest()
-    ).rstrip(b"=").decode("ascii")
+    expected = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
     assert challenge == expected
     assert 43 <= len(verifier) <= 128  # RFC 7636 verifier length
 
