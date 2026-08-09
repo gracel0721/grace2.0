@@ -70,6 +70,12 @@ models:
           - accepted_values:
               values: ['open', 'closed']
 
+  - name: fct_email_messages
+    description: Email message fact grain — one row per Gmail message, metadata only (spec §23).
+    columns:
+      - name: message_key
+        data_tests: [unique, not_null]
+
   - name: mart_daily_activity
     description: One row per date with commit and meeting aggregates.
     columns:

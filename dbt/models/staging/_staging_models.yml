@@ -81,3 +81,16 @@ models:
         description: Event length in minutes (end - start).
         data_tests:
           - not_null
+
+  - name: stg_gmail_messages
+    description: Cleaned Gmail messages — metadata only, never the body (spec §23).
+    columns:
+      - name: message_key
+        description: Surrogate key over (source, source_id).
+        data_tests: [unique, not_null]
+      - name: source_id
+        description: Natural key — the Gmail message id.
+        data_tests: [unique, not_null]
+      - name: date
+        description: Server receive time from Gmail's internalDate.
+        data_tests: [not_null]

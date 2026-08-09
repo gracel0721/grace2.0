@@ -20,6 +20,17 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import httpx
 
 CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+SPREADSHEETS_READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+
+# Consolidated scopes for every Google source in the warehouse (spec §23).
+# The one-time `pdw auth google` flow requests all of these together so the
+# single refresh token it mints is authorized for calendar, gmail, and sheets
+# (job applications) without a later re-auth. Google accepts a space-delimited
+# scope string in the authorization URL.
+GOOGLE_SCOPES = " ".join(
+    [CALENDAR_READONLY_SCOPE, GMAIL_READONLY_SCOPE, SPREADSHEETS_READONLY_SCOPE]
+)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
@@ -128,7 +139,7 @@ def run_oauth_flow(
     client_secret: str,
     *,
     port: int = 8787,
-    scope: str = CALENDAR_READONLY_SCOPE,
+    scope: str = GOOGLE_SCOPES,
     open_browser: bool = True,
 ) -> str:
     """Run the full one-time flow and return the refresh token."""
@@ -143,7 +154,5 @@ def run_oauth_flow(
     print(f"Waiting for authorization on {redirect_uri} ...")
 
     code = _wait_for_code(port)
-    tokens = exchange_code(
-        client_id, client_secret, code, redirect_uri, verifier
-    )
+    tokens = exchange_code(client_id, client_secret, code, redirect_uri, verifier)
     return tokens["refresh_token"]

@@ -30,9 +30,11 @@ from .checkpoints import get_cursor, set_cursor
 from .loaders import (
     CALENDAR,
     GITHUB,
+    GMAIL,
     RunSummary,
     _load_calendar,
     _load_commits,
+    _load_emails,
     _load_issues,
     _load_prs,
     _load_repos,
@@ -42,6 +44,7 @@ from .loaders import (
 GITHUB_CONNECTOR = "github"
 GITHUB_ISSUES_CONNECTOR = "github_issues"
 CALENDAR_CONNECTOR = "calendar"
+GMAIL_CONNECTOR = "gmail"
 
 
 def _all_cursors(conn, connector: str) -> dict[str, str]:
@@ -263,6 +266,57 @@ def run_calendar(
         return summary
     except (AuthError, RateLimitError, NetworkError) as exc:
         _record_failure(url, CALENDAR, started, exc)
+        raise
+
+
+def run_gmail(
+    connector,
+    *,
+    url: str | None = None,
+    full: bool = False,
+    since_days: int = 90,
+) -> RunSummary:
+    """Sync Gmail messages incrementally, metadata only (spec §3, §12, §23).
+
+    Mirrors ``run_calendar``'s single-entity ``"primary"`` cursor. Gmail search
+    is date-granular (``q=after:YYYY/MM/DD``), so the cursor (the newest message
+    ``date`` seen) is converted to a day boundary; the overlap on the cursor day
+    is harmless because raw upserts are idempotent (spec §13). With no cursor
+    the first sync backfills ``since_days`` of history.
+    """
+    started = datetime.now(UTC)
+    try:
+        cursor = None
+        if not full:
+            with connect(url) as conn:
+                cursor = get_cursor(conn, GMAIL_CONNECTOR, "primary")
+
+        if cursor and not full:
+            after_date = _parse_cursor(cursor).strftime("%Y/%m/%d")
+        else:
+            after_date = (started - timedelta(days=since_days)).strftime("%Y/%m/%d")
+
+        emails = connector.fetch_messages(after=after_date)
+
+        with connect(url) as conn:
+            with conn.cursor() as cur:
+                ei, eu = _load_emails(cur, emails, GMAIL)
+            # Advance the cursor to the newest message date seen, or now() if the
+            # mailbox returned nothing new (so the next run resumes from today).
+            latest = max((e.date for e in emails), default=started)
+            set_cursor(conn, GMAIL_CONNECTOR, "primary", latest.isoformat())
+
+            summary = RunSummary(
+                records_fetched=len(emails),
+                records_inserted=ei,
+                records_updated=eu,
+                records_failed=0,
+                status="success",
+            )
+            record_run(conn, GMAIL, started, summary)
+        return summary
+    except (AuthError, RateLimitError, NetworkError) as exc:
+        _record_failure(url, GMAIL, started, exc)
         raise
 
 

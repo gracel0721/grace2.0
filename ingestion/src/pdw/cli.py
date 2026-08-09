@@ -6,6 +6,7 @@ Subcommands:
     pdw status         — show recent pipeline runs (spec §24)
     pdw sync github    — sync real GitHub data (spec §6)
     pdw sync calendar  — sync real Google Calendar data (spec §6)
+    pdw sync gmail     — sync real Gmail messages (metadata only, spec §6)
 """
 
 from __future__ import annotations
@@ -251,6 +252,67 @@ def calendar(full: bool, since: int) -> None:
     )
 
 
+@sync.command()
+@click.option(
+    "--full", is_flag=True, help="Backfill the lookback window (ignore cursor)."
+)
+@click.option(
+    "--since",
+    type=int,
+    default=90,
+    show_default=True,
+    help="Lookback window in days for the initial backfill.",
+)
+def gmail(full: bool, since: int) -> None:
+    """Sync Gmail messages — metadata only (spec §3, §23)."""
+    from .connectors.base import ConnectorError, HttpClient
+    from .connectors.calendar import GoogleTokenRefresher
+    from .connectors.gmail import GmailClient, GmailConnector
+    from .pipeline.runner import run_gmail
+
+    settings = get_settings()
+    missing = [
+        name
+        for name, val in (
+            ("GOOGLE_CLIENT_ID", settings.google_client_id),
+            ("GOOGLE_CLIENT_SECRET", settings.google_client_secret),
+            ("GOOGLE_REFRESH_TOKEN", settings.google_refresh_token),
+        )
+        if not val
+    ]
+    if missing:
+        raise click.ClickException(
+            "Missing Google credentials: "
+            + ", ".join(missing)
+            + ". Add them to .env (spec §7, §23)."
+        )
+
+    import httpx
+
+    http = HttpClient(httpx.Client(timeout=30.0))
+    try:
+        access_token = GoogleTokenRefresher(
+            settings.google_client_id,
+            settings.google_client_secret,
+            http=http,
+        ).refresh(settings.google_refresh_token)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Google auth failed: {exc}") from exc
+
+    gmail_client = GmailClient(access_token, http=http)
+    connector = GmailConnector(gmail_client)
+    click.echo("Syncing Gmail (metadata only)...")
+    try:
+        summary = run_gmail(connector, full=full, since_days=since)
+    except ConnectorError as exc:
+        raise click.ClickException(f"Gmail sync failed: {exc}") from exc
+    click.echo(
+        f"  fetched={summary.records_fetched} "
+        f"inserted={summary.records_inserted} updated={summary.records_updated} "
+        f"failed={summary.records_failed} status={summary.status}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # One-time OAuth: `pdw auth google` (spec §23)
 # ---------------------------------------------------------------------------
@@ -301,7 +363,10 @@ def google(port: int) -> None:
             "Missing " + ", ".join(missing) + ". Add them to .env first (spec §7, §23)."
         )
 
-    click.echo("Starting Google OAuth flow (calendar.readonly scope)...")
+    click.echo(
+        "Starting Google OAuth flow "
+        "(calendar.readonly + gmail.readonly + spreadsheets.readonly scopes)..."
+    )
     try:
         refresh_token = run_oauth_flow(
             settings.google_client_id,

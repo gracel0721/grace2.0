@@ -95,3 +95,23 @@ class Issue:
     closed_at: datetime | None
     comments_count: int
     raw_payload: dict = field(default_factory=dict)
+
+
+@dataclass
+class Email:
+    """A Gmail message stored **metadata only** (spec §3, §23): the From/To/
+    Subject/Date headers and the ``snippet`` preview — never the body.
+
+    ``date`` is the server receive time derived from Gmail's ``internalDate``
+    (epoch milliseconds), which is always present and timezone-safe. The
+    connector cursor advances to the newest ``date`` seen.
+    """
+
+    source_id: str  # Gmail message id
+    thread_id: str
+    sender: str  # From header
+    recipients: str  # To header (comma-joined when multiple)
+    subject: str
+    date: datetime  # internalDate (ms) -> datetime
+    snippet: str  # ~200-char preview, NOT the message body
+    raw_payload: dict = field(default_factory=dict)

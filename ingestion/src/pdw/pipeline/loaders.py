@@ -19,10 +19,11 @@ from datetime import datetime
 from psycopg.types.json import Jsonb
 
 from ..db import connect
-from ..models import CalendarEvent, Commit, Issue, PullRequest, Repo
+from ..models import CalendarEvent, Commit, Email, Issue, PullRequest, Repo
 
 GITHUB = "github"
 CALENDAR = "calendar"
+GMAIL = "gmail"
 
 
 @dataclass
@@ -274,6 +275,47 @@ def _load_issues(cur, issues: Iterable[Issue], source: str) -> tuple[int, int]:
     return inserted, updated
 
 
+_EMAIL_SQL = """
+INSERT INTO raw_gmail_messages
+    (source, source_id, thread_id, sender, recipients, subject, date, snippet,
+     raw_payload)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (source, source_id) DO UPDATE SET
+    thread_id = EXCLUDED.thread_id,
+    sender = EXCLUDED.sender,
+    recipients = EXCLUDED.recipients,
+    subject = EXCLUDED.subject,
+    date = EXCLUDED.date,
+    snippet = EXCLUDED.snippet,
+    raw_payload = EXCLUDED.raw_payload,
+    updated_at = now()
+"""
+
+
+def _load_emails(cur, emails: Iterable[Email], source: str) -> tuple[int, int]:
+    inserted = updated = 0
+    for e in emails:
+        if _upsert(
+            cur,
+            _EMAIL_SQL,
+            (
+                source,
+                e.source_id,
+                e.thread_id,
+                e.sender,
+                e.recipients,
+                e.subject,
+                e.date,
+                e.snippet,
+                Jsonb(e.raw_payload or {}),
+            ),
+        ):
+            inserted += 1
+        else:
+            updated += 1
+    return inserted, updated
+
+
 def record_run(conn, source: str, started: datetime, summary: RunSummary) -> None:
     """Write one ``pipeline_runs`` audit row from a RunSummary (spec §24)."""
     with conn.cursor() as cur:
@@ -370,6 +412,33 @@ def load_calendar(
 
         summary = RunSummary(
             records_fetched=len(events),
+            records_inserted=ei,
+            records_updated=eu,
+            records_failed=0,
+        )
+        if record_run:
+            record_run(conn, source, started, summary)
+    return summary
+
+
+def load_gmail(
+    emails: Iterable[Email],
+    *,
+    url: str | None = None,
+    source: str = GMAIL,
+    record_run: bool = True,
+) -> RunSummary:
+    """Load Gmail messages (metadata only) into the raw gmail table."""
+    from datetime import UTC
+
+    emails = list(emails)
+    started = datetime.now(UTC)
+    with connect(url) as conn:
+        with conn.cursor() as cur:
+            ei, eu = _load_emails(cur, emails, source)
+
+        summary = RunSummary(
+            records_fetched=len(emails),
             records_inserted=ei,
             records_updated=eu,
             records_failed=0,
