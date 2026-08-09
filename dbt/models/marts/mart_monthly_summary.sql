@@ -24,7 +24,7 @@ active_days as (
     group by 1
 )
 select
-    coalesce(c.month, m.month) as month,
+    coalesce(c.month, m.month, d.month) as month,
     coalesce(c.commits, 0) as commits,
     coalesce(c.active_repos, 0) as active_repos,
     coalesce(m.meeting_minutes, 0) as meeting_minutes,

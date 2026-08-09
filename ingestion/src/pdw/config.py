@@ -32,6 +32,25 @@ class Settings(BaseSettings):
         default=None, description="Connection string for the test database"
     )
 
+    # --- Real connector credentials (all optional; spec §7, §23) ----------
+    # Only required when running `pdw sync github` / `pdw sync calendar`.
+    # The synthetic pipeline (`pdw seed`) needs none of these.
+    github_token: str | None = Field(
+        default=None, description="GitHub personal access token (PAT)"
+    )
+    google_client_id: str | None = Field(
+        default=None, description="Google OAuth client ID"
+    )
+    google_client_secret: str | None = Field(
+        default=None, description="Google OAuth client secret"
+    )
+    google_refresh_token: str | None = Field(
+        default=None, description="Google OAuth refresh token"
+    )
+    google_calendar_id: str = Field(
+        default="primary", description="Calendar ID to sync (default: primary)"
+    )
+
     @classmethod
     def load(cls) -> Settings:
         try:
@@ -49,3 +68,8 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Return a fresh Settings instance populated from the environment."""
     return Settings.load()
+
+
+def env_file() -> Path:
+    """Absolute path to the local .env (repo root). Never committed."""
+    return _ENV_FILE
