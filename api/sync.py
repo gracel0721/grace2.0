@@ -32,11 +32,20 @@ async def sync_pipeline():
     results = {}
 
     try:
-        # Use a shared HTTP client
-        http_client = HttpClient(httpx.Client(timeout=30.0))
+        # IMPORTANT: In the Vercel serverless environment,
+        # the GitHubClient expects a HttpClient wrapper.
+        # We create a standard httpx.Client and wrap it.
+        # We MUST NOT use a base_url in the HttpClient wrapper
+        # because the GitHubClient handles the base_url internally
+        # via its own httpx.Client configuration.
+
+        raw_client = httpx.Client(timeout=30.0)
+        http_client = HttpClient(raw_client)
 
         # 1. GitHub Sync
         if settings.github_token:
+            # Pass the wrapped http_client.
+            # GitHubClient uses this to perform requests.
             gh_client = GitHubClient(settings.github_token, client=http_client)
             gh_conn = GitHubConnector(gh_client)
             results["github"] = runner.run_github(gh_conn, url=url).__dict__
