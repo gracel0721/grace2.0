@@ -58,7 +58,7 @@ class GitHubClient:
         page = 1
         while True:
             data = self._http.get(
-                "/user/repos",
+                f"{API_ROOT}/user/repos",
                 per_page=PER_PAGE,
                 page=page,
                 sort="pushed",
@@ -81,7 +81,7 @@ class GitHubClient:
         params: dict = {"per_page": PER_PAGE}
         if since is not None:
             params["since"] = since.isoformat()
-        path = f"/repos/{owner}/{repo}/commits"
+        path = f"{API_ROOT}/repos/{owner}/{repo}/commits"
         try:
             page = 1
             while True:
@@ -117,7 +117,7 @@ class GitHubClient:
         }
         if since is not None:
             params["since"] = since.isoformat()
-        path = f"/repos/{owner}/{repo}/issues"
+        path = f"{API_ROOT}/repos/{owner}/{repo}/issues"
         page = 1
         while True:
             params["page"] = page
