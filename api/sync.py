@@ -59,22 +59,30 @@ async def sync_pipeline():
 
         # 2. Google Calendar Sync
         if settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
-            cal_client = CalendarClient(
+            # First, refresh the token
+            from pdw.connectors.calendar import GoogleTokenRefresher
+            refresher = GoogleTokenRefresher(
                 settings.google_client_id,
                 settings.google_client_secret,
-                settings.google_refresh_token,
-                client=http_client
+                http=http_client
+            )
+            access_token = refresher.refresh(settings.google_refresh_token)
+
+            cal_client = CalendarClient(
+                access_token,
+                http=http_client
             )
             cal_conn = CalendarConnector(cal_client)
             results["calendar"] = runner.run_calendar(cal_conn, url=url).__dict__
 
         # 3. Gmail Sync
         if settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
+            # Reuse the access_token from the calendar sync or refresh again
+            # Since we just refreshed it for calendar, we can reuse it.
+            # However, for robustness, we'll use the one we just got.
             gmail_client = GmailClient(
-                settings.google_client_id,
-                settings.google_client_secret,
-                settings.google_refresh_token,
-                client=http_client
+                access_token,
+                http=http_client
             )
             gmail_conn = GmailConnector(gmail_client)
             results["gmail"] = runner.run_gmail(gmail_conn, url=url).__dict__

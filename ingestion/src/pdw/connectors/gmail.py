@@ -40,8 +40,13 @@ METADATA_HEADERS = ["From", "To", "Subject", "Date"]
 class GmailClient:
     """Thin Gmail API client (httpx wrapper, injectable for tests)."""
 
-    def __init__(self, access_token: str, *, http: HttpClient) -> None:
-        self._http = http
+    def __init__(
+        self,
+        access_token: str,
+        *,
+        http: HttpClient | None = None,
+    ) -> None:
+        self._http = http or HttpClient(httpx.Client(timeout=30.0))
         self._headers = {"Authorization": f"Bearer {access_token}"}
 
     def list_messages(
