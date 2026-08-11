@@ -44,14 +44,18 @@ async def sync_pipeline():
 
         # 1. GitHub Sync
         if settings.github_token:
-            # Pass the wrapped http_client.
-            # GitHubClient uses this to perform requests.
+            # Debug check: ensure token is not empty
+            if not settings.github_token.strip():
+                return {"status": "error", "message": "GITHUB_TOKEN is set but empty"}
+
             gh_client = GitHubClient(settings.github_token, client=http_client)
             gh_conn = GitHubConnector(gh_client)
             results["github"] = runner.run_github(gh_conn, url=url).__dict__
 
             gh_issues_conn = GitHubIssuesConnector(gh_client)
             results["github_issues"] = runner.run_github_issues(gh_issues_conn, url=url).__dict__
+        else:
+            results["github"] = {"status": "skipped", "message": "GITHUB_TOKEN not provided"}
 
         # 2. Google Calendar Sync
         if settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
