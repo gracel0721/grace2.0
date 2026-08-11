@@ -98,9 +98,9 @@ class CalendarClient:
         self,
         access_token: str,
         *,
-        http: HttpClient,
+        http: HttpClient | None = None,
     ) -> None:
-        self._http = http
+        self._http = http or HttpClient(httpx.Client(timeout=30.0))
         self._headers = {"Authorization": f"Bearer {access_token}"}
 
     def get_events(
