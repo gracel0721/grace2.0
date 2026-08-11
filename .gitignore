@@ -36,3 +36,4 @@ dbt/.user.yml
 .idea/
 .vscode/
 *.swp
+spec2.md
