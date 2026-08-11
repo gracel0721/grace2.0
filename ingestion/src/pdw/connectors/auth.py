@@ -149,7 +149,7 @@ def run_oauth_flow(
 ) -> str:
     """Run the full one-time flow and return the refresh token."""
     verifier, challenge = _pkce_pair()
-    redirect_uri = f"http://localhost:{port}"
+    redirect_uri = f"http://127.0.0.1:{port}"
     auth_url = build_auth_url(client_id, redirect_uri, challenge, scope)
 
     if open_browser:
@@ -176,10 +176,10 @@ def run_spotify_oauth_flow(
     user creates a Spotify app (dev dashboard), sets ``SPOTIFY_CLIENT_ID`` in
     ``.env``, then runs ``pdw auth spotify``; this mints a ``refresh_token``
     written back to ``.env`` (spec §23). The redirect URI must be registered
-    on the Spotify app as ``http://localhost:{port}``.
+    on the Spotify app as ``http://127.0.0.1:{port}``.
     """
     verifier, challenge = _pkce_pair()
-    redirect_uri = f"http://localhost:{port}"
+    redirect_uri = f"http://127.0.0.1:{port}"
     auth_url = (
         f"{SPOTIFY_AUTH_URL}?"
         + urlencode(
