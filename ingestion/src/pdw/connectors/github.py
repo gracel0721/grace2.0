@@ -59,6 +59,7 @@ class GitHubClient:
         while True:
             data = self._http.get(
                 f"{API_ROOT}/user/repos",
+                headers={"Authorization": f"Bearer {self._token}"},
                 per_page=PER_PAGE,
                 page=page,
                 sort="pushed",
@@ -86,7 +87,11 @@ class GitHubClient:
             page = 1
             while True:
                 params["page"] = page
-                data = self._http.get(path, **params).json()
+                data = self._http.get(
+                    path,
+                    headers={"Authorization": f"Bearer {self._token}"},
+                    **params
+                ).json()
                 if not data:
                     return
                 yield data
@@ -121,7 +126,11 @@ class GitHubClient:
         page = 1
         while True:
             params["page"] = page
-            data = self._http.get(path, **params).json()
+            data = self._http.get(
+                path,
+                headers={"Authorization": f"Bearer {self._token}"},
+                **params
+            ).json()
             if not data:
                 return
             yield data
