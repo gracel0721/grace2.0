@@ -1,4 +1,5 @@
-from http.server import BaseHTTPRequestHandler
+from fastapi import FastAPI
+from mangum import Mangum
 import sys
 import os
 import json
@@ -10,7 +11,7 @@ sys.path.append(os.path.join(os.getcwd(), "ingestion/src"))
 from pdw.config import get_settings
 from pdw.pipeline import runner
 from pdw.connectors.base import HttpClient
-from pdw.connectors.github import GitHubClient, GitHubConnector
+from pdw.connectors.github import GitHubClient, GitHubConnector, GitHubIssuesConnector
 from pdw.connectors.calendar import CalendarClient, CalendarConnector
 from pdw.connectors.gmail import GmailClient, GmailConnector
 from pdw.connectors.spotify import (
@@ -18,17 +19,20 @@ from pdw.connectors.spotify import (
     SpotifyClient,
     SpotifyConnector
 )
+import httpx
 
-def handler(request):
-    """Vercel serverless function handler to trigger the PDW ingestion pipeline."""
+app = FastAPI()
+
+@app.get("/api/sync")
+async def sync_pipeline():
+    """Trigger the PDW ingestion pipeline."""
     settings = get_settings()
     url = settings.database_url
 
     results = {}
 
     try:
-        # We use a shared HTTP client for all connectors
-        import httpx
+        # Use a shared HTTP client
         http_client = HttpClient(httpx.Client(timeout=30.0))
 
         # 1. GitHub Sync
@@ -37,7 +41,6 @@ def handler(request):
             gh_conn = GitHubConnector(gh_client)
             results["github"] = runner.run_github(gh_conn, url=url).__dict__
 
-            from pdw.connectors.github import GitHubIssuesConnector
             gh_issues_conn = GitHubIssuesConnector(gh_client)
             results["github_issues"] = runner.run_github_issues(gh_issues_conn, url=url).__dict__
 
@@ -72,29 +75,16 @@ def handler(request):
             results["spotify"] = runner.run_spotify(spot_conn, url=url).__dict__
 
         return {
-            "statusCode": 200,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({
-                "status": "success",
-                "timestamp": datetime.now(UTC).isoformat(),
-                "results": results
-            })
+            "status": "success",
+            "timestamp": datetime.now(UTC).isoformat(),
+            "results": results
         }
 
     except Exception as e:
         return {
-            "statusCode": 500,
-            "headers": {"Content-Type": "application/json"},
-            "body": json.dumps({
-                "status": "error",
-                "message": str(e)
-            })
+            "status": "error",
+            "message": str(e)
         }
 
-class handler_class(BaseHTTPRequestHandler):
-    def do_GET(self):
-        response = handler(self)
-        self.send_response(response["statusCode"])
-        self.send_header("Content-Type", response["headers"].get("Content-Type", "application/json"))
-        self.end_headers()
-        self.wfile.write(response["body"].encode("utf-8"))
+# Vercel entry point
+handler = Mangum(app)

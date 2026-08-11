@@ -5,11 +5,5 @@
       "path": "/api/sync",
       "schedule": "0 */6 * * *"
     }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/sync",
-      "destination": "/api/sync.py"
-    }
   ]
 }
