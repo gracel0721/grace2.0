@@ -72,7 +72,10 @@ async def sync_pipeline():
                 access_token,
                 http=http_client
             )
-            cal_conn = CalendarConnector(cal_client)
+            cal_conn = CalendarConnector(
+                cal_client,
+                calendar_id=settings.google_calendar_id
+            )
             results["calendar"] = runner.run_calendar(cal_conn, url=url).__dict__
 
         # 3. Gmail Sync
