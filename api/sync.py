@@ -1,0 +1,100 @@
+from http.server import BaseHTTPRequestHandler
+import sys
+import os
+import json
+from datetime import datetime, UTC
+
+# Add the ingestion source directory to the path so we can import pdw
+sys.path.append(os.path.join(os.getcwd(), "ingestion/src"))
+
+from pdw.config import get_settings
+from pdw.pipeline import runner
+from pdw.connectors.base import HttpClient
+from pdw.connectors.github import GitHubClient, GitHubConnector
+from pdw.connectors.calendar import CalendarClient, CalendarConnector
+from pdw.connectors.gmail import GmailClient, GmailConnector
+from pdw.connectors.spotify import (
+    SpotifyTokenRefresher,
+    SpotifyClient,
+    SpotifyConnector
+)
+
+def handler(request):
+    """Vercel serverless function handler to trigger the PDW ingestion pipeline."""
+    settings = get_settings()
+    url = settings.database_url
+
+    results = {}
+
+    try:
+        # We use a shared HTTP client for all connectors
+        import httpx
+        http_client = HttpClient(httpx.Client(timeout=30.0))
+
+        # 1. GitHub Sync
+        if settings.github_token:
+            gh_client = GitHubClient(settings.github_token, client=http_client)
+            gh_conn = GitHubConnector(gh_client)
+            results["github"] = runner.run_github(gh_conn, url=url).__dict__
+
+            from pdw.connectors.github import GitHubIssuesConnector
+            gh_issues_conn = GitHubIssuesConnector(gh_client)
+            results["github_issues"] = runner.run_github_issues(gh_issues_conn, url=url).__dict__
+
+        # 2. Google Calendar Sync
+        if settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
+            cal_client = CalendarClient(
+                settings.google_client_id,
+                settings.google_client_secret,
+                settings.google_refresh_token,
+                client=http_client
+            )
+            cal_conn = CalendarConnector(cal_client)
+            results["calendar"] = runner.run_calendar(cal_conn, url=url).__dict__
+
+        # 3. Gmail Sync
+        if settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
+            gmail_client = GmailClient(
+                settings.google_client_id,
+                settings.google_client_secret,
+                settings.google_refresh_token,
+                client=http_client
+            )
+            gmail_conn = GmailConnector(gmail_client)
+            results["gmail"] = runner.run_gmail(gmail_conn, url=url).__dict__
+
+        # 4. Spotify Sync
+        if settings.spotify_client_id and settings.spotify_refresh_token:
+            refresher = SpotifyTokenRefresher(settings.spotify_client_id, http=http_client)
+            access_token = refresher.refresh(settings.spotify_refresh_token)
+            spot_client = SpotifyClient(access_token, http=http_client)
+            spot_conn = SpotifyConnector(spot_client)
+            results["spotify"] = runner.run_spotify(spot_conn, url=url).__dict__
+
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "status": "success",
+                "timestamp": datetime.now(UTC).isoformat(),
+                "results": results
+            })
+        }
+
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "status": "error",
+                "message": str(e)
+            })
+        }
+
+class handler_class(BaseHTTPRequestHandler):
+    def do_GET(self):
+        response = handler(self)
+        self.send_response(response["statusCode"])
+        self.send_header("Content-Type", response["headers"].get("Content-Type", "application/json"))
+        self.end_headers()
+        self.wfile.write(response["body"].encode("utf-8"))

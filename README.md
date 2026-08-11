@@ -1,7 +1,7 @@
 # Personal Data Warehouse
 
 A local-first personal data warehouse: ingest activity from external sources
-(GitHub, Google Calendar), store raw data in PostgreSQL, transform it into
+(GitHub, Google Calendar, Gmail, Spotify), store raw data in PostgreSQL, transform it into
 analytics-ready models with dbt, and expose metrics through a dashboard and a
 natural-language AI interface.
 
@@ -12,12 +12,11 @@ ingestion, ELT pipelines, PostgreSQL modeling, dbt transformations, incremental
 
 > **Status:** the foundation plus **real connectors** are in place —
 > Dockerized PostgreSQL, raw schema + migrations, the full dbt transform path
-> (staging → intermediate → marts + tests), and real **GitHub** + **Google
-> Calendar** connectors with incremental + idempotent ingestion. The pipeline
+> (staging → intermediate → marts + tests), and real **GitHub**, **Google
+> Calendar**, **Gmail**, and **Spotify** connectors with incremental + idempotent ingestion. The pipeline
 > runs end-to-end on **synthetic data with no external credentials**
 > (`make sync`), and on **real data** once credentials are added to `.env`
-> (`make sync-real`). Dagster orchestration, the API, dashboard, and AI layer
-> are deferred to later milestones.
+> (`make sync-real`). This project serves as the Personal Data Warehouse (PDW) backend for the Personal Developer OS.
 
 ## Architecture
 
@@ -31,7 +30,7 @@ External APIs → Ingestion (Python) → Raw PostgreSQL → dbt → Analytics �
   preserving original payloads as JSONB.
 - **Transformation** — dbt builds staging → intermediate → marts.
 - **Analytics** — star-schema facts/dimensions/marts.
-- **Presentation / AI** — FastAPI, dashboard, LLM query layer (deferred).
+- **Presentation / AI** — FastAPI, dashboard, LLM query layer (provided by Personal Developer OS).
 
 See [`docs/architecture.md`](./docs/architecture.md) for diagrams and
 [`docs/data-model.md`](./docs/data-model.md) for the analytical model.
@@ -59,7 +58,7 @@ below) then:
 
 ```bash
 make reset         # clear raw + analytics so sources don't double-count
-make sync-real     # sync GitHub + Google Calendar into raw tables
+make sync-real     # sync all real sources into raw tables
 make dbt           # rebuild analytics marts from the real raw data
 ```
 
@@ -91,7 +90,7 @@ make psql
 | `make sync`   | full synthetic pipeline: migrate → seed → dbt         |
 | `make sync-github`   | sync real GitHub data (needs `GITHUB_TOKEN`)   |
 | `make sync-calendar` | sync real Google Calendar data (needs `GOOGLE_*`) |
-| `make sync-real`     | sync both real sources                          |
+| `make sync-real`     | sync all real sources (GitHub, Calendar, Gmail, Spotify) |
 | `make reset`  | truncate raw + analytics, then rebuild dbt             |
 
 > Google Calendar also needs a one-time `pdw auth google` (see below).
@@ -132,6 +131,8 @@ sync never duplicates rows (spec §13).
   returns modifications **and** cancellations); the initial backfill uses a
   `timeMin`/`timeMax` lookback window. All-day events use date-only values with
   an exclusive `end` (stored as `end.date + 1 day`).
+- **Gmail** (`connectors/gmail.py`) — metadata-only ingestion of emails (headers + snippet).
+- **Spotify** (`connectors/spotify.py`) — ingests track play history.
 
 Error handling (spec §25): auth failures and exhausted rate limits abort the
 run with a clear message; per-repo failures (e.g. a 404) are counted and the run
